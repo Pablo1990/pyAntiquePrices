@@ -54,6 +54,7 @@ class AntiqueAnalyzer:
 
     def __init__(self, model: str = _DEFAULT_MODEL) -> None:
         self.model = model
+        self.on_pull_progress = None  # optional callable(status: str)
 
     # ------------------------------------------------------------------
     # Public API
@@ -120,6 +121,8 @@ class AntiqueAnalyzer:
                     status = progress.get("status", "")
                     if status:
                         print(f"  {status}", end="\r", flush=True)
+                        if callable(self.on_pull_progress):
+                            self.on_pull_progress(status)
                 print()  # newline after progress
                 logger.info("Model '%s' pulled successfully.", self.model)
         except Exception as exc:  # noqa: BLE001

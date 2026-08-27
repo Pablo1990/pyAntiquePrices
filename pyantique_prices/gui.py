@@ -141,18 +141,34 @@ class App(tk.Tk):
             messagebox.showwarning("No model", "Please enter an Ollama model name.")
             return
 
+        # Capture all widget values here on the main thread before handing off
+        # to the background thread – Tkinter widgets must NOT be accessed from
+        # any thread other than the main one.
+        context = self._context_text.get("1.0", tk.END).strip()
+        keywords = self._keywords_var.get().strip()
+        image_path = self._image_path
+
         self._analyse_btn.config(state=tk.DISABLED)
         self._progress.start(10)
         self._set_status("Fetching reference prices…")
         self._set_result("")
 
-        thread = threading.Thread(target=self._run_analysis, daemon=True)
+        thread = threading.Thread(
+            target=self._run_analysis,
+            args=(image_path, model, context, keywords),
+            daemon=True,
+        )
         thread.start()
 
-    def _run_analysis(self) -> None:
+    def _run_analysis(
+        self,
+        image_path: Path,
+        model: str,
+        context: str,
+        keywords: str,
+    ) -> None:
         """Background worker – must not touch Tk widgets directly."""
         try:
-            keywords = self._keywords_var.get().strip()
             reference_prices = ""
             if keywords:
                 try:
@@ -162,10 +178,11 @@ class App(tk.Tk):
 
             self._after_safe(self._set_status, "Analysing image with Ollama…")
 
-            context = self._context_text.get("1.0", tk.END)
-            self._analyzer.model = self._model_var.get().strip()
+            self._analyzer.model = model
+            # Provide a progress callback so model downloads are visible in the GUI
+            self._analyzer.on_pull_progress = self._on_pull_progress
             result = self._analyzer.analyse(
-                self._image_path,
+                image_path,
                 context=context,
                 reference_prices=reference_prices,
             )
@@ -185,6 +202,10 @@ class App(tk.Tk):
         self._progress.stop()
         self._analyse_btn.config(state=tk.NORMAL)
         messagebox.showerror("Analysis error", message)
+
+    def _on_pull_progress(self, status: str) -> None:
+        """Called from the background thread to relay download progress to the GUI."""
+        self._after_safe(self._set_status, f"Downloading model: {status}")
 
     # ------------------------------------------------------------------
     # Helpers
