@@ -87,11 +87,15 @@ class TestParsePriceRange:
 
 
 class TestAnalyse:
-    def test_analyse_calls_ollama(self):
+    def _make_mock_ollama(self, content="This is a fine 19th century vase worth €400-€600.", model="llava"):
         mock_ollama = MagicMock()
-        mock_ollama.chat.return_value = {
-            "message": {"content": "This is a fine 19th century vase worth €400-€600."}
-        }
+        mock_ollama.chat.return_value = {"message": {"content": content}}
+        # Simulate model already present locally
+        mock_ollama.list.return_value = {"models": [{"name": model}]}
+        return mock_ollama
+
+    def test_analyse_calls_ollama(self):
+        mock_ollama = self._make_mock_ollama()
 
         with patch.dict(sys.modules, {"ollama": mock_ollama}):
             analyzer = AntiqueAnalyzer(model="llava")
@@ -101,8 +105,7 @@ class TestAnalyse:
         assert "vase" in result.lower()
 
     def test_analyse_uses_context_and_prices(self):
-        mock_ollama = MagicMock()
-        mock_ollama.chat.return_value = {"message": {"content": "appraisal text"}}
+        mock_ollama = self._make_mock_ollama(content="appraisal text")
 
         with patch.dict(sys.modules, {"ollama": mock_ollama}):
             analyzer = AntiqueAnalyzer()
@@ -117,3 +120,26 @@ class TestAnalyse:
         user_message = next(m for m in messages if m["role"] == "user")
         assert "grandmother" in user_message["content"]
         assert "300-500" in user_message["content"]
+
+    def test_auto_pulls_missing_model(self):
+        mock_ollama = MagicMock()
+        mock_ollama.chat.return_value = {"message": {"content": "appraisal"}}
+        # Model is NOT in the local list
+        mock_ollama.list.return_value = {"models": []}
+        mock_ollama.pull.return_value = iter([{"status": "pulling"}, {"status": "success"}])
+
+        with patch.dict(sys.modules, {"ollama": mock_ollama}):
+            analyzer = AntiqueAnalyzer(model="llava")
+            analyzer.analyse(DUMMY_IMAGE)
+
+        mock_ollama.pull.assert_called_once_with("llava", stream=True)
+        mock_ollama.chat.assert_called_once()
+
+    def test_skips_pull_when_model_present(self):
+        mock_ollama = self._make_mock_ollama()
+
+        with patch.dict(sys.modules, {"ollama": mock_ollama}):
+            analyzer = AntiqueAnalyzer(model="llava")
+            analyzer.analyse(DUMMY_IMAGE)
+
+        mock_ollama.pull.assert_not_called()

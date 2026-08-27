@@ -84,6 +84,8 @@ class AntiqueAnalyzer:
         """
         import ollama  # imported lazily so the package loads without ollama running
 
+        self._ensure_model(ollama)
+
         image_data = self._encode_image(image_path)
         prompt = _USER_TEMPLATE.format(
             context=context.strip() or "No additional context provided.",
@@ -102,6 +104,28 @@ class AntiqueAnalyzer:
             ],
         )
         return response["message"]["content"]
+
+    def _ensure_model(self, ollama) -> None:
+        """Pull *self.model* if it is not already available locally."""
+        try:
+            local_models = [m["name"] for m in ollama.list().get("models", [])]
+            # Normalise names: strip the ":latest" suffix for comparison
+            def _base(name: str) -> str:
+                return name.split(":")[0]
+
+            if not any(_base(m) == _base(self.model) for m in local_models):
+                logger.info("Model '%s' not found locally – pulling from Ollama…", self.model)
+                print(f"Downloading model '{self.model}' – this may take a few minutes…")
+                for progress in ollama.pull(self.model, stream=True):
+                    status = progress.get("status", "")
+                    if status:
+                        print(f"  {status}", end="\r", flush=True)
+                print()  # newline after progress
+                logger.info("Model '%s' pulled successfully.", self.model)
+        except Exception as exc:  # noqa: BLE001
+            # If we cannot verify local models (e.g. Ollama not running) let
+            # the subsequent chat() call surface the real error.
+            logger.debug("Could not verify/pull model: %s", exc)
 
     def list_available_models(self) -> list[str]:
         """Return a list of locally available Ollama model names."""
