@@ -141,6 +141,26 @@ class AntiqueAnalyzer:
     # Helpers
     # ------------------------------------------------------------------
 
+    _IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp", ".bmp", ".tiff", ".tif", ".gif"}
+
+    @classmethod
+    def collect_images(cls, path: str | Path) -> list[Path]:
+        """Return a sorted list of image files under *path*.
+
+        If *path* is a file it is returned as a single-element list.
+        If *path* is a directory all image files found directly inside it
+        (non-recursive) are returned, sorted by filename.
+        """
+        p = Path(path)
+        if p.is_file():
+            return [p]
+        if p.is_dir():
+            return sorted(
+                f for f in p.iterdir()
+                if f.is_file() and f.suffix.lower() in cls._IMAGE_EXTENSIONS
+            )
+        raise FileNotFoundError(f"Path not found: {p}")
+
     @staticmethod
     def _encode_image(image_path: str | Path) -> str:
         """Return the base64-encoded content of an image file."""

@@ -71,6 +71,34 @@ class TestEncodeImage:
             AntiqueAnalyzer._encode_image("/nonexistent/path/image.jpg")
 
 
+class TestCollectImages:
+    def test_single_file_returns_list_of_one(self):
+        result = AntiqueAnalyzer.collect_images(DUMMY_IMAGE)
+        assert result == [DUMMY_IMAGE]
+
+    def test_directory_returns_images(self, tmp_path):
+        (tmp_path / "a.jpg").write_bytes(b"x")
+        (tmp_path / "b.png").write_bytes(b"x")
+        (tmp_path / "readme.txt").write_bytes(b"x")
+        result = AntiqueAnalyzer.collect_images(tmp_path)
+        names = {p.name for p in result}
+        assert names == {"a.jpg", "b.png"}
+
+    def test_directory_sorted(self, tmp_path):
+        for name in ("c.jpg", "a.jpg", "b.jpg"):
+            (tmp_path / name).write_bytes(b"x")
+        result = AntiqueAnalyzer.collect_images(tmp_path)
+        assert [p.name for p in result] == ["a.jpg", "b.jpg", "c.jpg"]
+
+    def test_empty_directory_returns_empty(self, tmp_path):
+        result = AntiqueAnalyzer.collect_images(tmp_path)
+        assert result == []
+
+    def test_missing_path_raises(self):
+        with pytest.raises(FileNotFoundError):
+            AntiqueAnalyzer.collect_images("/no/such/path")
+
+
 class TestParsePriceRange:
     @pytest.mark.parametrize(
         "text, expected",

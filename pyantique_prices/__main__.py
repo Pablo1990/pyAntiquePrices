@@ -13,8 +13,8 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument(
         "--cli",
-        metavar="IMAGE",
-        help="Run in headless CLI mode with the given image path.",
+        metavar="IMAGE_OR_FOLDER",
+        help="Run in headless CLI mode with the given image path or folder.",
     )
     parser.add_argument(
         "--context",
@@ -40,8 +40,21 @@ def main(argv: list[str] | None = None) -> int:
 
 
 def _run_cli(args) -> int:
+    from pathlib import Path
+
     from .analyzer import AntiqueAnalyzer
     from .scraper import TodoColeccionScraper
+
+    target = Path(args.cli)
+    try:
+        images = AntiqueAnalyzer.collect_images(target)
+    except FileNotFoundError as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        return 1
+
+    if not images:
+        print("No image files found.", file=sys.stderr)
+        return 1
 
     scraper = TodoColeccionScraper()
     reference_prices = ""
@@ -53,12 +66,22 @@ def _run_cli(args) -> int:
             print(f"Warning: could not fetch reference prices: {exc}", file=sys.stderr)
 
     analyzer = AntiqueAnalyzer(model=args.model)
-    print(f"Analysing image with model '{args.model}'…")
-    result = analyzer.analyse(
-        args.cli, context=args.context, reference_prices=reference_prices
-    )
-    print("\n--- APPRAISAL ---\n")
-    print(result)
+    total = len(images)
+
+    for idx, img_path in enumerate(images, 1):
+        print(f"\n{'='*60}")
+        print(f"Image {idx}/{total}: {img_path}")
+        print(f"{'='*60}")
+        print(f"Analysing with model '{args.model}'…")
+        try:
+            result = analyzer.analyse(
+                img_path, context=args.context, reference_prices=reference_prices
+            )
+            print("\n--- APPRAISAL ---\n")
+            print(result)
+        except Exception as exc:  # noqa: BLE001
+            print(f"[ERROR] {exc}", file=sys.stderr)
+
     return 0
 
 

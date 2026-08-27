@@ -44,16 +44,19 @@ class App(tk.Tk):
         top = ttk.LabelFrame(self, text="Item details", padding=_PAD)
         top.pack(fill=tk.X, padx=_PAD, pady=_PAD)
 
-        # Image row
+        # Image / folder row
         img_row = ttk.Frame(top)
         img_row.pack(fill=tk.X, pady=(0, _PAD))
 
-        ttk.Label(img_row, text="Image:").pack(side=tk.LEFT)
-        self._img_var = tk.StringVar(value="No file selected")
-        ttk.Entry(img_row, textvariable=self._img_var, state="readonly", width=55).pack(
+        ttk.Label(img_row, text="Image / folder:").pack(side=tk.LEFT)
+        self._img_var = tk.StringVar(value="No file or folder selected")
+        ttk.Entry(img_row, textvariable=self._img_var, state="readonly", width=50).pack(
             side=tk.LEFT, padx=_PAD
         )
-        ttk.Button(img_row, text="Browse…", command=self._browse_image).pack(side=tk.LEFT)
+        ttk.Button(img_row, text="Image…", command=self._browse_image).pack(side=tk.LEFT)
+        ttk.Button(img_row, text="Folder…", command=self._browse_folder).pack(
+            side=tk.LEFT, padx=(4, 0)
+        )
 
         # Model row
         model_row = ttk.Frame(top)
@@ -79,9 +82,7 @@ class App(tk.Tk):
         ).pack(side=tk.LEFT)
 
         # Context area
-        ttk.Label(top, text="Additional context / description:").pack(
-            anchor=tk.W
-        )
+        ttk.Label(top, text="Additional context / description:").pack(anchor=tk.W)
         self._context_text = scrolledtext.ScrolledText(top, height=4, wrap=tk.WORD)
         self._context_text.pack(fill=tk.X, pady=(2, 0))
 
@@ -100,7 +101,7 @@ class App(tk.Tk):
         )
 
         # ---- Progress bar ----
-        self._progress = ttk.Progressbar(self, mode="indeterminate")
+        self._progress = ttk.Progressbar(self, mode="determinate")
         self._progress.pack(fill=tk.X, padx=_PAD, pady=(2, 0))
 
         # ---- Result area ----
@@ -127,13 +128,19 @@ class App(tk.Tk):
             self._image_path = Path(path)
             self._img_var.set(str(self._image_path))
 
+    def _browse_folder(self) -> None:
+        path = filedialog.askdirectory(title="Select folder with antique images")
+        if path:
+            self._image_path = Path(path)
+            self._img_var.set(str(self._image_path))
+
     def _start_analysis(self) -> None:
         if self._image_path is None:
-            messagebox.showwarning("No image", "Please select an image first.")
+            messagebox.showwarning("No selection", "Please select an image or folder first.")
             return
 
         if not self._image_path.exists():
-            messagebox.showerror("File not found", f"Cannot find:\n{self._image_path}")
+            messagebox.showerror("Not found", f"Cannot find:\n{self._image_path}")
             return
 
         model = self._model_var.get().strip()
@@ -141,28 +148,37 @@ class App(tk.Tk):
             messagebox.showwarning("No model", "Please enter an Ollama model name.")
             return
 
-        # Capture all widget values here on the main thread before handing off
-        # to the background thread – Tkinter widgets must NOT be accessed from
-        # any thread other than the main one.
+        # Collect image paths on the main thread
+        try:
+            images = AntiqueAnalyzer.collect_images(self._image_path)
+        except FileNotFoundError as exc:
+            messagebox.showerror("Error", str(exc))
+            return
+
+        if not images:
+            messagebox.showwarning("No images", "No image files found in the selected folder.")
+            return
+
+        # Capture all Tkinter values here before handing to background thread
         context = self._context_text.get("1.0", tk.END).strip()
         keywords = self._keywords_var.get().strip()
-        image_path = self._image_path
 
         self._analyse_btn.config(state=tk.DISABLED)
-        self._progress.start(10)
-        self._set_status("Fetching reference prices…")
+        self._progress["value"] = 0
+        self._progress["maximum"] = len(images)
+        self._set_status(f"Starting analysis of {len(images)} image(s)…")
         self._set_result("")
 
         thread = threading.Thread(
             target=self._run_analysis,
-            args=(image_path, model, context, keywords),
+            args=(images, model, context, keywords),
             daemon=True,
         )
         thread.start()
 
     def _run_analysis(
         self,
-        image_path: Path,
+        images: list[Path],
         model: str,
         context: str,
         keywords: str,
@@ -176,30 +192,51 @@ class App(tk.Tk):
                 except Exception as exc:  # noqa: BLE001
                     logger.warning("Scraper error: %s", exc)
 
-            self._after_safe(self._set_status, "Analysing image with Ollama…")
-
             self._analyzer.model = model
-            # Provide a progress callback so model downloads are visible in the GUI
             self._analyzer.on_pull_progress = self._on_pull_progress
-            result = self._analyzer.analyse(
-                image_path,
-                context=context,
-                reference_prices=reference_prices,
-            )
-            self._after_safe(self._on_analysis_done, result)
+
+            total = len(images)
+            all_results: list[str] = []
+
+            for idx, img_path in enumerate(images, 1):
+                self._after_safe(
+                    self._set_status,
+                    f"Analysing image {idx}/{total}: {img_path.name}…",
+                )
+                try:
+                    result = self._analyzer.analyse(
+                        img_path,
+                        context=context,
+                        reference_prices=reference_prices,
+                    )
+                    all_results.append(
+                        f"{'='*60}\n"
+                        f"Image {idx}/{total}: {img_path.name}\n"
+                        f"{'='*60}\n"
+                        f"{result}\n"
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    all_results.append(
+                        f"{'='*60}\n"
+                        f"Image {idx}/{total}: {img_path.name}  [ERROR]\n"
+                        f"{'='*60}\n"
+                        f"{exc}\n"
+                    )
+                self._after_safe(self._set_progress, idx)
+
+            self._after_safe(self._on_analysis_done, "\n".join(all_results))
         except Exception as exc:  # noqa: BLE001
             self._after_safe(self._on_analysis_error, str(exc))
 
     def _on_analysis_done(self, result: str) -> None:
         self._set_result(result)
         self._set_status("Analysis complete.")
-        self._progress.stop()
         self._analyse_btn.config(state=tk.NORMAL)
 
     def _on_analysis_error(self, message: str) -> None:
         self._set_result(f"Error:\n{message}")
         self._set_status("Analysis failed.")
-        self._progress.stop()
+        self._progress["value"] = 0
         self._analyse_btn.config(state=tk.NORMAL)
         messagebox.showerror("Analysis error", message)
 
@@ -213,6 +250,9 @@ class App(tk.Tk):
 
     def _set_status(self, text: str) -> None:
         self._status_var.set(text)
+
+    def _set_progress(self, value: int) -> None:
+        self._progress["value"] = value
 
     def _set_result(self, text: str) -> None:
         self._result_text.config(state=tk.NORMAL)
