@@ -1,12 +1,11 @@
 """pyAntiquePrices – public API."""
 
 from .analyzer import AntiqueAnalyzer, RECOMMENDED_MODELS
-from .scraper import TodoColeccionScraper, DuckDuckGoScraper, MultiSourceScraper
+from .scraper import DuckDuckGoScraper, MultiSourceScraper
 
 __all__ = [
     "AntiqueAnalyzer",
     "RECOMMENDED_MODELS",
-    "TodoColeccionScraper",
     "DuckDuckGoScraper",
     "MultiSourceScraper",
 ]

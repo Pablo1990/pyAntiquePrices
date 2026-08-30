@@ -77,66 +77,6 @@ class _BaseScraper:
 
 
 # ---------------------------------------------------------------------------
-# todocoleccion.net scraper
-# ---------------------------------------------------------------------------
-
-class TodoColeccionScraper(_BaseScraper):
-    """Scrape todocoleccion.net for reference prices (robots.txt compliant).
-
-    If the robots file disallows the search path the scrape is gracefully
-    skipped and an empty string is returned.
-    """
-
-    base_url = "https://www.todocoleccion.net"
-    _SEARCH_PATH = "/buscar/"
-
-    def get_reference_prices(self, query: str, max_results: int = 5) -> str:
-        """Return a formatted string of reference prices for *query*."""
-        if not self._is_allowed(self._SEARCH_PATH):
-            logger.warning("robots.txt disallows scraping %s – skipping.", self._SEARCH_PATH)
-            return ""
-
-        url = f"{self.base_url}{self._SEARCH_PATH}?q={quote_plus(query)}"
-        logger.debug("Fetching: %s", url)
-        html = self._fetch(url)
-        if not html:
-            return ""
-
-        listings = self._parse_listings(html, max_results)
-        if not listings:
-            return ""
-
-        lines = [f"Reference prices from todocoleccion.net for '{query}':"]
-        for i, item in enumerate(listings, 1):
-            price_str = f"  Price: {item['price']}" if item["price"] else ""
-            lines.append(f"  {i}. {item['title']}{price_str}")
-        return "\n".join(lines)
-
-    @staticmethod
-    def _parse_listings(html: str, max_results: int) -> list[dict]:
-        soup = BeautifulSoup(html, "html.parser")
-        results: list[dict] = []
-        candidates = soup.select(
-            "article.tc-ad, li.tc-ad, .search-results li, .results-list article, "
-            "[class*='item-'], [class*='product-']"
-        )
-        for elem in candidates[:max_results]:
-            title_tag = (
-                elem.select_one("h2") or elem.select_one("h3")
-                or elem.select_one(".title") or elem.select_one("[class*='title']")
-            )
-            price_tag = (
-                elem.select_one(".price") or elem.select_one("[class*='price']")
-                or elem.select_one("[itemprop='price']")
-            )
-            title = title_tag.get_text(strip=True) if title_tag else None
-            price = price_tag.get_text(strip=True) if price_tag else None
-            if title:
-                results.append({"title": title, "price": price})
-        return results
-
-
-# ---------------------------------------------------------------------------
 # DuckDuckGo HTML scraper (no API key required)
 # ---------------------------------------------------------------------------
 
@@ -191,28 +131,27 @@ class DuckDuckGoScraper(_BaseScraper):
 
 
 # ---------------------------------------------------------------------------
-# Multi-source scraper (combines all sources)
+# Multi-source scraper
 # ---------------------------------------------------------------------------
 
 class MultiSourceScraper:
     """Query multiple sources and combine results into a single context string.
 
-    Sources attempted in order:
-    1. todocoleccion.net  (Spanish specialist marketplace)
-    2. DuckDuckGo HTML    (broad web search, auction sites)
+    Sources attempted:
+    1. DuckDuckGo HTML – broad web search scoped to major auction sites
+       (Catawiki, LiveAuctioneers, Invaluable)
 
     Each source is queried only if its robots.txt permits it.
     """
 
     def __init__(self, crawl_delay: float = _DEFAULT_CRAWL_DELAY) -> None:
-        self._todocoleccion = TodoColeccionScraper(crawl_delay=crawl_delay)
         self._duckduckgo = DuckDuckGoScraper(crawl_delay=crawl_delay)
 
     def get_reference_prices(self, query: str, max_results: int = 5) -> str:
         """Return a combined reference string from all available sources."""
         parts: list[str] = []
 
-        for scraper in (self._todocoleccion, self._duckduckgo):
+        for scraper in (self._duckduckgo,):
             try:
                 result = scraper.get_reference_prices(query, max_results=max_results)
                 if result:
