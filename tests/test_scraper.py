@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from unittest.mock import MagicMock
+from urllib.parse import parse_qs, unquote_plus, urlparse
 
 import pytest
 
@@ -70,9 +71,11 @@ class TestDuckDuckGoParseResults:
         scraper.get_reference_prices("pocket watch")
 
         fetch_url = scraper._fetch.call_args.args[0]
-        assert "todocoleccion.net" in fetch_url
-        assert "setdart.com" in fetch_url
-        assert "spain" in fetch_url
+        encoded_query = parse_qs(urlparse(fetch_url).query)["q"][0]
+        decoded_query = unquote_plus(encoded_query)
+        assert "site:todocoleccion.net" in decoded_query
+        assert "site:setdart.com" in decoded_query
+        assert "spain" in decoded_query
 
 
 class TestMultiSourceScraper:
