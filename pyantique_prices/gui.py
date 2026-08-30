@@ -166,6 +166,19 @@ class App(tk.Tk):
             messagebox.showwarning("No model", "Please enter an Ollama model name.")
             return
 
+        # Warn if the selected model is not in the recommended vision list
+        if model not in RECOMMENDED_MODELS:
+            proceed = messagebox.askyesno(
+                "Vision support warning",
+                f"'{model}' is not in the list of known vision-capable models.\n\n"
+                f"This tool requires a model that can process images. "
+                f"If '{model}' does not support vision, the analysis will fail.\n\n"
+                f"Recommended models: {', '.join(RECOMMENDED_MODELS)}\n\n"
+                "Continue anyway?",
+            )
+            if not proceed:
+                return
+
         try:
             images = AntiqueAnalyzer.collect_images(self._image_path)
         except FileNotFoundError as exc:

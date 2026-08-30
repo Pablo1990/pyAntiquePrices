@@ -183,18 +183,36 @@ class AntiqueAnalyzer:
         )
         logger.debug("Sending request to Ollama model '%s' (deep_thinking=%s)",
                      self.model, self.deep_thinking)
-        response = ollama.chat(
-            model=self.model,
-            messages=[
-                {"role": "system", "content": _SYSTEM_PROMPT},
-                {
-                    "role": "user",
-                    "content": prompt,
-                    "images": [image_data],
-                },
-            ],
-        )
+        try:
+            response = ollama.chat(
+                model=self.model,
+                messages=[
+                    {"role": "system", "content": _SYSTEM_PROMPT},
+                    {
+                        "role": "user",
+                        "content": prompt,
+                        "images": [image_data],
+                    },
+                ],
+            )
+        except Exception as exc:
+            self._raise_if_not_vision(exc)
+            raise
         return response["message"]["content"]
+
+    @staticmethod
+    def _raise_if_not_vision(exc: Exception) -> None:
+        """Re-raise *exc* as a descriptive ValueError when it signals that the
+        chosen model does not support multimodal / vision requests."""
+        msg = str(exc).lower()
+        if "multimodal" in msg or "does not support multimodal" in msg:
+            vision_list = ", ".join(RECOMMENDED_MODELS)
+            raise ValueError(
+                f"The selected model does not support image (vision) requests.\n\n"
+                f"Please choose a vision-capable model, for example:\n  {vision_list}\n\n"
+                f"You can change the model in the GUI dropdown or via --model on the CLI.\n\n"
+                f"Original error: {exc}"
+            ) from exc
 
     def _ensure_model(self, ollama) -> None:
         """Pull *self.model* if it is not already available locally.

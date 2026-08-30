@@ -229,3 +229,25 @@ class TestAnalyse:
             analyzer.analyse(DUMMY_IMAGE)
 
         mock_ollama.pull.assert_not_called()
+
+    def test_non_vision_model_raises_value_error(self):
+        """400 multimodal error from Ollama is re-raised as a friendly ValueError."""
+        mock_ollama = self._make_mock_ollama()
+        mock_ollama.chat.side_effect = Exception(
+            '{"error":{"code":400,"message":"Multimodal data provided, but model does not support multimodal requests.","type":"invalid_request_error"}}'
+        )
+
+        with patch.dict(sys.modules, {"ollama": mock_ollama}):
+            analyzer = AntiqueAnalyzer(model="gpt-oss:20b")
+            with pytest.raises(ValueError, match="does not support image"):
+                analyzer.analyse(DUMMY_IMAGE)
+
+    def test_other_error_reraises_unchanged(self):
+        """Non-multimodal errors are re-raised as-is (not wrapped in ValueError)."""
+        mock_ollama = self._make_mock_ollama()
+        mock_ollama.chat.side_effect = Exception("connection timeout")
+
+        with patch.dict(sys.modules, {"ollama": mock_ollama}):
+            analyzer = AntiqueAnalyzer(model="minicpm-v")
+            with pytest.raises(Exception, match="connection timeout"):
+                analyzer.analyse(DUMMY_IMAGE)
