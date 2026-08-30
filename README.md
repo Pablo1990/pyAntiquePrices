@@ -1,105 +1,416 @@
 # pyAntiquePrices
 
-A Python package to estimate the **price and age** of antiques (art, furniture, ceramics, jewellery, …) from an image, using a local LLM via [Ollama](https://ollama.com/).
+> **Local-first antique appraisal powered by a vision LLM.**  
+> Point it at an image (or a whole folder), pick a model, and get an expert-quality appraisal with estimated age, condition, and price range — all running on your own machine.
 
-## Features
+---
 
-* 🖼️ **Multimodal LLM appraisal** – submits your image to any Ollama vision model (default: `llama3.2-vision`) with a domain-specific expert prompt and receives a structured appraisal: description, estimated period, condition, EUR price range, key value drivers and confidence level.
-* 🧠 **Deep thinking mode** – chain-of-thought reasoning prompt that walks through object ID, style analysis, material assessment, condition check, market comparables and synthesis before giving a final answer. Significantly improves accuracy on ambiguous items.
-* 🌐 **Web reference prices** – optionally queries DuckDuckGo (no API key) scoped to major auction sites (Catawiki, LiveAuctioneers, Invaluable) to find comparable listings and ground the price estimate. Fully respects `robots.txt` with a polite crawl delay.
-* 🖥️ **Minimal GUI** – a lightweight Tkinter interface with model selector, deep-thinking toggle, folder batch mode; no web server or cloud service required.
-* 💻 **Headless CLI mode** – for scripting or batch pipelines.
+## Table of contents
+
+1. [How it works](#how-it-works)
+2. [Requirements](#requirements)
+3. [Installation](#installation)
+4. [Quick start – GUI](#quick-start--gui)
+5. [Quick start – CLI](#quick-start--cli)
+6. [Python API](#python-api)
+7. [Recommended models](#recommended-models)
+8. [Model compatibility notes](#model-compatibility-notes)
+9. [Reference price search](#reference-price-search)
+10. [Deep thinking mode](#deep-thinking-mode)
+11. [Batch processing](#batch-processing)
+12. [Troubleshooting](#troubleshooting)
+13. [Development](#development)
+14. [Legal & ethical notes](#legal--ethical-notes)
+
+---
+
+## How it works
+
+```
+Image file
+    │
+    ▼
+AntiqueAnalyzer
+    ├─ Encodes image to base64
+    ├─ (Optional) MultiSourceScraper fetches comparable prices
+    │       └─ DuckDuckGo → Catawiki / LiveAuctioneers / Invaluable
+    └─ Sends to local Ollama vision model
+            └─ Expert appraiser system prompt
+            └─ (Optional) Deep-thinking chain-of-thought prompt
+                    │
+                    ▼
+            Structured appraisal:
+              • Description (type, style, materials)
+              • Estimated age / period
+              • Condition grade
+              • Price range (auction + retail, EUR)
+              • Key value factors
+              • Confidence level
+```
+
+No data leaves your machine. The LLM runs locally via [Ollama](https://ollama.com/).
+
+---
 
 ## Requirements
 
-| Dependency | Notes |
+| Requirement | Notes |
 |---|---|
-| Python ≥ 3.9 | |
-| [Ollama](https://ollama.com/) | Must be running locally. A vision model will be auto-downloaded on first use. |
-| `ollama` Python SDK | installed automatically |
-| `requests`, `beautifulsoup4` | web scraper |
-| `Pillow` | image utilities |
-| `tkinter` | GUI (usually ships with Python) |
+| **Python ≥ 3.9** | |
+| **[Ollama](https://ollama.com/)** | Must be installed and running. Download from [ollama.com](https://ollama.com/download). |
+| **A vision-capable model** | Auto-downloaded on first use, or run `ollama pull minicpm-v` in advance. |
+| `ollama` Python SDK | Installed automatically via `pip`. |
+| `requests`, `beautifulsoup4` | Web scraper (installed automatically). |
+| `Pillow` | Image utilities (installed automatically). |
+| `tkinter` | GUI — ships with most Python distributions. On Linux: `sudo apt install python3-tk`. |
 
-## Recommended models
-
-These models are confirmed to work with **Ollama ≥ 0.30** (new llama.cpp backend).  
-⚠️ `llama3.2-vision` uses the `mllama` architecture which is **not** supported by Ollama 0.30+.
-
-| Model | Notes |
-|---|---|
-| `minicpm-v` | **Default** – compact, accurate vision + reasoning; works on all Ollama versions |
-| `llava:13b` | LLaVA 13B – strong multimodal, widely supported |
-| `llava` | LLaVA 7B – reliable fallback, small footprint (~4 GB) |
-| `moondream` | Very small but capable vision model (~2 GB) |
-| `gemma3` | Google Gemma 3 vision – good reasoning |
-| `mistral-small3.1` | Mistral vision – capable, medium size |
-
-Any Ollama-compatible model name can be typed in the GUI or passed via `--model`.
+---
 
 ## Installation
 
 ```bash
+# 1. Clone the repository
+git clone https://github.com/Pablo1990/pyAntiquePrices.git
+cd pyAntiquePrices
+
+# 2. Install the package (editable mode recommended for development)
 pip install -e .
+
+# 3. Start Ollama (if not already running)
+ollama serve          # macOS/Linux background daemon
+# On Windows: Ollama runs as a system tray application after installation
 ```
 
-## Usage
+The first time you analyse an image, the selected model will be automatically downloaded if it is not already present. To pre-download the default model:
 
-### GUI (default)
+```bash
+ollama pull minicpm-v
+```
+
+---
+
+## Quick start – GUI
 
 ```bash
 pyantique-prices
 ```
 
-1. Select an **Image…** or an entire **Folder…** of images.
-2. Choose a model from the dropdown (or type any Ollama model name).
-3. *(Optional)* Enable **Deep thinking** for more accurate chain-of-thought reasoning.
-4. *(Optional)* Enter search keywords to look up reference prices from auction sites.
-5. *(Optional)* Add any additional context about the item.
-6. Click **Analyse antique**.
+The graphical interface opens immediately.
 
-### CLI (headless)
+### Step-by-step
+
+1. **Select an image or folder**  
+   Click **Image…** to pick a single photo, or **Folder…** to select a directory.  
+   Supported formats: JPEG, PNG, WEBP, BMP, TIFF, GIF.
+
+2. **Choose a model**  
+   The dropdown is pre-populated with recommended vision models.  
+   You can also type any Ollama model name directly.  
+   If you enter a model that is not in the recommended list, a warning dialog will ask you to confirm — text-only models will fail because they cannot process images.
+
+3. **Enable Deep thinking** *(recommended)*  
+   When checked, the model explicitly reasons step-by-step before producing its final answer. This takes longer but is significantly more accurate, especially for ambiguous items.
+
+4. **Enter search keywords** *(optional)*  
+   e.g. `"silver pocket watch Victorian"` — the app will search DuckDuckGo scoped to major auction sites (Catawiki, LiveAuctioneers, Invaluable) and include the results in the prompt to ground the price estimate.
+
+5. **Add context** *(optional)*  
+   Any extra information you have: provenance, size, markings, origin, family history.
+
+6. **Click Analyse antique**  
+   A progress bar tracks each image. Results appear in the scrollable appraisal panel below.
+
+---
+
+## Quick start – CLI
 
 ```bash
-# Single image
-pyantique-prices --cli path/to/item.jpg \
-    --keywords "silver pocket watch 19th century" \
-    --context "Found in an English estate, no hallmarks visible" \
-    --model minicpm-v
+# Single image, default model (minicpm-v), deep thinking on
+pyantique-prices --cli path/to/photo.jpg
 
-# Entire folder
-pyantique-prices --cli path/to/folder/ --model llama3.2-vision
+# With search keywords and additional context
+pyantique-prices --cli photo.jpg \
+    --keywords "bronze Buddha Meiji period" \
+    --context "Found in a Japanese estate, base has red lacquer seal"
+
+# Specify a different model
+pyantique-prices --cli photo.jpg --model llava:13b
 
 # Disable deep thinking for a faster pass
-pyantique-prices --cli item.jpg --no-deep-thinking
+pyantique-prices --cli photo.jpg --no-deep-thinking
+
+# Analyse an entire folder of images
+pyantique-prices --cli /path/to/antiques/
+
+# Combine folder + keywords + model
+pyantique-prices --cli /path/to/antiques/ \
+    --model llava \
+    --keywords "Chinese porcelain blue white" \
+    --context "Items from a French chateau clearance"
 ```
 
-### Python API
+### All CLI options
+
+| Option | Default | Description |
+|---|---|---|
+| `--cli IMAGE_OR_FOLDER` | — | Path to an image file or a directory of images. |
+| `--model MODEL` | `minicpm-v` | Ollama model name. Must support vision. |
+| `--keywords KEYWORDS` | *(empty)* | Search keywords for web price lookup. |
+| `--context CONTEXT` | *(empty)* | Free-text context about the item(s). |
+| `--deep-thinking` | on | Enable chain-of-thought reasoning (default). |
+| `--no-deep-thinking` | — | Disable chain-of-thought for faster results. |
+
+Running without `--cli` launches the GUI.
+
+---
+
+## Python API
 
 ```python
 from pyantique_prices import AntiqueAnalyzer, MultiSourceScraper
 
+# 1. (Optional) fetch web reference prices
 scraper = MultiSourceScraper()
-prices = scraper.get_reference_prices("Chinese blue and white porcelain vase")
+prices = scraper.get_reference_prices("Chinese blue and white porcelain vase 18th century")
 
-analyzer = AntiqueAnalyzer(model="minicpm-v", deep_thinking=True)
+# 2. Analyse the image
+analyzer = AntiqueAnalyzer(
+    model="minicpm-v",     # any Ollama vision model
+    deep_thinking=True,    # chain-of-thought reasoning
+)
 appraisal = analyzer.analyse(
     "vase.jpg",
-    context="No markings on base.",
+    context="No markings on base. Approx 35 cm tall.",
     reference_prices=prices,
 )
+
 print(appraisal)
+
+# 3. (Optional) extract the numeric price range
+low, high = analyzer.parse_price_range(appraisal) or (None, None)
+if low:
+    print(f"Estimated range: €{low:.0f} – €{high:.0f}")
 ```
+
+### Batch processing via API
+
+```python
+from pyantique_prices import AntiqueAnalyzer
+
+images = AntiqueAnalyzer.collect_images("/path/to/folder")
+analyzer = AntiqueAnalyzer()
+
+for img in images:
+    result = analyzer.analyse(img, context="Estate sale items, France")
+    print(f"\n=== {img.name} ===\n{result}")
+```
+
+---
+
+## Recommended models
+
+These models are confirmed to work with **Ollama ≥ 0.30**.
+
+| Model | RAM / VRAM | Notes |
+|---|---|---|
+| **`minicpm-v`** *(default)* | ~5 GB | Best balance of accuracy and speed. Works on all Ollama versions. |
+| `llava:13b` | ~10 GB | Larger LLaVA — stronger visual understanding. |
+| `llava` | ~4 GB | Original LLaVA 7B — lightweight fallback. |
+| `moondream` | ~2 GB | Very small; good for low-memory machines. |
+| `gemma3` | ~6 GB | Google Gemma 3 vision variant — strong reasoning. |
+| `mistral-small3.1` | ~6 GB | Mistral vision model. |
+
+To install a model manually:
+
+```bash
+ollama pull minicpm-v
+ollama pull llava:13b
+```
+
+---
+
+## Model compatibility notes
+
+> ⚠️ **`llama3.2-vision` is NOT supported** by Ollama ≥ 0.30.  
+> It uses the `mllama` architecture which was removed when Ollama replaced its backend.  
+> Use `minicpm-v` or any model from the table above instead.
+
+> ⚠️ **Text-only models** (e.g. `mistral`, `deepseek-r1`, `gemma`) will fail with:  
+> `Multimodal data provided, but model does not support multimodal requests.`  
+> The app will show a clear error message listing the recommended vision models.
+
+---
+
+## Reference price search
+
+When you supply search keywords, `MultiSourceScraper` queries **DuckDuckGo** (HTML endpoint, no API key required) scoped to major auction sites:
+
+- [Catawiki](https://www.catawiki.com)
+- [LiveAuctioneers](https://www.liveauctioneers.com)
+- [Invaluable](https://www.invaluable.com)
+
+The scraped snippets are injected into the LLM prompt so the model can anchor its price estimate to real comparable sales.
+
+The scraper fully respects each site's `robots.txt` and uses a polite 3-second crawl delay between requests. If a site disallows scraping, that source is silently skipped and the appraisal continues without it.
+
+**Tips for good keywords:**
+- Be specific: `"French ormolu clock Empire period"` not just `"clock"`
+- Include materials and style: `"silver pocket watch hunter case 19th century"`
+- Include origin if known: `"Japanese Meiji bronze vase"`
+
+---
+
+## Deep thinking mode
+
+When **Deep thinking** is enabled (the default), the model is asked to work through six explicit reasoning steps before producing the final appraisal:
+
+1. **Object identification** — What is it? Rule out alternatives.
+2. **Style and period analysis** — What decorative features narrow the date?
+3. **Material and technique assessment** — How was it made?
+4. **Condition and authenticity** — What wear is visible? Is ageing consistent?
+5. **Market comparables** — What comparable pieces or sales come to mind?
+6. **Synthesis** — Combine all factors into a probability-weighted estimate.
+
+The thinking section is shown in the output so you can review the reasoning.  
+Disable it with `--no-deep-thinking` (CLI) or uncheck the box (GUI) when you need faster results.
+
+---
+
+## Batch processing
+
+### GUI
+
+Click **Folder…** to select a directory. The app will find all image files inside and analyse them in order. A progress bar advances after each image. Results are shown with a clear separator:
+
+```
+============================================================
+Image 1/5: vase_01.jpg
+============================================================
+1. **Description**: Blue and white porcelain vase...
+...
+============================================================
+Image 2/5: clock_01.jpg
+============================================================
+...
+```
+
+### CLI
+
+Pass a directory path to `--cli`:
+
+```bash
+pyantique-prices --cli /path/to/images/ --keywords "estate sale" --model minicpm-v
+```
+
+Per-image errors are reported to `stderr` without stopping the batch.
+
+---
+
+## Troubleshooting
+
+### `Connection refused` / Ollama not running
+
+Start Ollama first:
+
+```bash
+ollama serve
+```
+
+Or on macOS/Windows, launch the Ollama application from your Applications folder / system tray.
+
+---
+
+### `unknown model architecture: 'mllama'`
+
+You are using `llama3.2-vision` with Ollama ≥ 0.30. Switch to a supported model:
+
+```bash
+pyantique-prices --model minicpm-v --cli photo.jpg
+```
+
+---
+
+### `Multimodal data provided, but model does not support multimodal requests`
+
+The selected model is text-only and cannot process images. Use a vision model from the [Recommended models](#recommended-models) table.
+
+---
+
+### GUI does not open (`_tkinter` not found)
+
+Install Tkinter for your Python distribution:
+
+```bash
+# Debian / Ubuntu
+sudo apt install python3-tk
+
+# Fedora
+sudo dnf install python3-tkinter
+
+# macOS (Homebrew Python)
+brew install python-tk
+```
+
+---
+
+### Model download is slow
+
+Large models can be several gigabytes. Pre-download before running the app:
+
+```bash
+ollama pull minicpm-v      # ~5 GB
+ollama pull llava:13b       # ~10 GB
+```
+
+---
 
 ## Development
 
 ```bash
+# Install with dev dependencies
 pip install -e ".[dev]"
-pytest tests/
+
+# Run the test suite
+pytest tests/ -v
+
+# Run a specific test file
+pytest tests/test_analyzer.py -v
 ```
 
-## Legal / Ethical notes
+### Project structure
 
-* The web scraper uses the DuckDuckGo HTML endpoint, respects its `robots.txt`, and includes a configurable crawl delay (default 3 s).
-* The LLM runs entirely **locally** via Ollama; no image data is sent to any external service.
+```
+pyAntiquePrices/
+├── pyantique_prices/
+│   ├── __init__.py        # Public API exports
+│   ├── __main__.py        # CLI entry point
+│   ├── analyzer.py        # AntiqueAnalyzer – LLM appraisal logic
+│   ├── scraper.py         # DuckDuckGoScraper, MultiSourceScraper
+│   └── gui.py             # Tkinter GUI
+├── tests/
+│   ├── test_analyzer.py
+│   └── test_scraper.py
+├── pyproject.toml
+└── README.md
+```
 
+### Adding a new scraper source
+
+1. Subclass `_BaseScraper` in `scraper.py`.
+2. Set `base_url` and implement `get_reference_prices()`.
+3. Check robots.txt via `self._is_allowed(path)` before fetching.
+4. Register the new scraper in `MultiSourceScraper.__init__()`.
+
+---
+
+## Legal & ethical notes
+
+- **Privacy**: The LLM runs entirely locally via Ollama. No image data is sent to any external service.
+- **Web scraping**: The DuckDuckGo scraper respects `robots.txt` and applies a configurable crawl delay (default 3 s). It identifies itself with a descriptive `User-Agent`.
+- **Accuracy**: Appraisals are AI-generated estimates based on visual information only. They should be treated as a starting point, not a professional valuation. For high-value items, consult a certified appraiser.
+
+---
+
+## License
+
+See [LICENSE](LICENSE).
