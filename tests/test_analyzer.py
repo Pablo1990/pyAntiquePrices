@@ -133,7 +133,8 @@ class TestAnalyse:
             analyzer = AntiqueAnalyzer(model="minicpm-v")
             result = analyzer.analyse(DUMMY_IMAGE, context="Blue vase")
 
-        mock_ollama.chat.assert_called_once()
+        # chat is called at least twice: once for keyword generation, once for appraisal
+        assert mock_ollama.chat.call_count >= 2
         assert "vase" in result.lower()
 
     def test_analyse_uses_context_and_prices(self):
@@ -147,6 +148,8 @@ class TestAnalyse:
                 reference_prices="Similar clocks: 300-500 EUR",
             )
 
+        # When reference_prices is pre-supplied, only the appraisal chat call is made
+        mock_ollama.chat.assert_called_once()
         call_args = mock_ollama.chat.call_args
         messages = call_args.kwargs.get("messages") or call_args.args[0].get("messages", []) if call_args.args else call_args.kwargs["messages"]
         user_message = next(m for m in messages if m["role"] == "user")
@@ -160,7 +163,8 @@ class TestAnalyse:
             analyzer = AntiqueAnalyzer(deep_thinking=True)
             analyzer.analyse(DUMMY_IMAGE)
 
-        call_args = mock_ollama.chat.call_args
+        # The last chat call is the appraisal call
+        call_args = mock_ollama.chat.call_args_list[-1]
         messages = call_args.kwargs.get("messages") or call_args.kwargs["messages"]
         user_message = next(m for m in messages if m["role"] == "user")
         assert "<thinking>" in user_message["content"]
@@ -172,7 +176,8 @@ class TestAnalyse:
             analyzer = AntiqueAnalyzer(deep_thinking=False)
             analyzer.analyse(DUMMY_IMAGE)
 
-        call_args = mock_ollama.chat.call_args
+        # The last chat call is the appraisal call
+        call_args = mock_ollama.chat.call_args_list[-1]
         messages = call_args.kwargs.get("messages") or call_args.kwargs["messages"]
         user_message = next(m for m in messages if m["role"] == "user")
         assert "<thinking>" not in user_message["content"]
@@ -194,7 +199,7 @@ class TestAnalyse:
             analyzer.analyse(DUMMY_IMAGE)
 
         mock_ollama.pull.assert_called_once_with("minicpm-v", stream=True)
-        mock_ollama.chat.assert_called_once()
+        assert mock_ollama.chat.call_count >= 1
 
     def test_pull_failure_raises_runtime_error(self):
         mock_ollama = MagicMock()

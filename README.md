@@ -31,10 +31,12 @@ Image file
     │
     ▼
 AntiqueAnalyzer
-    ├─ Encodes image to base64
-    ├─ (Optional) MultiSourceScraper fetches comparable prices
-    │       └─ DuckDuckGo → Catawiki / LiveAuctioneers / Invaluable
-    └─ Sends to local Ollama vision model
+    ├─ Step 1 – Auto keyword generation
+    │       └─ Quick LLM call: identifies the object and produces 5-7 search terms
+    ├─ Step 2 – Automatic price scraping
+    │       └─ MultiSourceScraper queries DuckDuckGo → Catawiki / LiveAuctioneers / Invaluable
+    │          (user-supplied extra keywords are merged with the auto-generated ones)
+    └─ Step 3 – Full appraisal
             └─ Expert appraiser system prompt
             └─ (Optional) Deep-thinking chain-of-thought prompt
                     │
@@ -49,6 +51,7 @@ AntiqueAnalyzer
 ```
 
 No data leaves your machine. The LLM runs locally via [Ollama](https://ollama.com/).
+Scraping is fully automatic — you don't need to supply any keywords unless you want to refine the search.
 
 ---
 
@@ -111,8 +114,8 @@ The graphical interface opens immediately.
 3. **Enable Deep thinking** *(recommended)*  
    When checked, the model explicitly reasons step-by-step before producing its final answer. This takes longer but is significantly more accurate, especially for ambiguous items.
 
-4. **Enter search keywords** *(optional)*  
-   e.g. `"silver pocket watch Victorian"` — the app will search DuckDuckGo scoped to major auction sites (Catawiki, LiveAuctioneers, Invaluable) and include the results in the prompt to ground the price estimate.
+4. **Enter extra search keywords** *(optional)*  
+   Keywords are **auto-generated from the image** — the model first identifies the object and produces auction-specialist search terms automatically. If you want to refine the search (e.g. you know the origin or have the maker's name), add extra keywords here and they will be merged with the auto-generated ones.
 
 5. **Add context** *(optional)*  
    Any extra information you have: provenance, size, markings, origin, family history.
@@ -155,7 +158,7 @@ pyantique-prices --cli /path/to/antiques/ \
 |---|---|---|
 | `--cli IMAGE_OR_FOLDER` | — | Path to an image file or a directory of images. |
 | `--model MODEL` | `minicpm-v` | Ollama model name. Must support vision. |
-| `--keywords KEYWORDS` | *(empty)* | Search keywords for web price lookup. |
+| `--keywords KEYWORDS` | *(empty)* | Extra search keywords merged with auto-generated ones. |
 | `--context CONTEXT` | *(empty)* | Free-text context about the item(s). |
 | `--deep-thinking` | on | Enable chain-of-thought reasoning (default). |
 | `--no-deep-thinking` | — | Disable chain-of-thought for faster results. |
@@ -243,7 +246,13 @@ ollama pull llava:13b
 
 ## Reference price search
 
-When you supply search keywords, `MultiSourceScraper` queries **DuckDuckGo** (HTML endpoint, no API key required) scoped to major auction sites:
+Price scraping is **fully automatic** — no configuration required.
+
+For every image analysed, the app:
+
+1. Makes a quick LLM call to identify the object and produce 5-7 auction-specialist search keywords.
+2. Merges those with any extra keywords you supplied.
+3. Queries **DuckDuckGo** (HTML endpoint, no API key required) scoped to major auction sites to find comparable listings:
 
 - [Catawiki](https://www.catawiki.com)
 - [LiveAuctioneers](https://www.liveauctioneers.com)
@@ -253,10 +262,10 @@ The scraped snippets are injected into the LLM prompt so the model can anchor it
 
 The scraper fully respects each site's `robots.txt` and uses a polite 3-second crawl delay between requests. If a site disallows scraping, that source is silently skipped and the appraisal continues without it.
 
-**Tips for good keywords:**
-- Be specific: `"French ormolu clock Empire period"` not just `"clock"`
-- Include materials and style: `"silver pocket watch hunter case 19th century"`
-- Include origin if known: `"Japanese Meiji bronze vase"`
+**When to supply extra keywords:**
+- You know the maker or manufacturer.
+- You have information about the origin not visible in the image.
+- The auto-search is returning irrelevant results (e.g. add `"19th century"` to narrow results).
 
 ---
 

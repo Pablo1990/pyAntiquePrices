@@ -28,6 +28,16 @@ _DEFAULT_MODEL = "minicpm-v"
 # Prompts
 # -------------------------------------------------------------------------
 
+_KEYWORDS_PROMPT = """\
+Look at the image and identify the antique or collectible object shown.
+Return ONLY a comma-separated list of 5-7 concise search keywords \
+(no bullet points, no sentences, no explanation) that an auction specialist \
+would type into a search engine to find comparable sold items for this specific piece.
+Include: object type, style/period, probable origin, main material, and any \
+distinctive decorative feature visible.
+Example output format: French ormolu mantel clock, Empire period, gilt bronze, \
+porcelain dial, 19th century"""
+
 _SYSTEM_PROMPT = """\
 You are a world-class antique appraiser with decades of hands-on experience in \
 fine art, furniture, ceramics, silver, jewellery, clocks, toys, books and all \
@@ -149,13 +159,51 @@ class AntiqueAnalyzer:
     # Public API
     # ------------------------------------------------------------------
 
+    def generate_search_keywords(self, image_path: str | Path) -> str:
+        """Return a comma-separated keyword string derived from the image.
+
+        Makes a quick vision-model call to identify the object and produce
+        5-7 search terms suitable for querying auction-site databases.
+        Returns an empty string on failure (non-fatal – appraisal continues).
+        """
+        import ollama  # noqa: PLC0415
+
+        try:
+            image_data = self._encode_image(image_path)
+            response = ollama.chat(
+                model=self.model,
+                messages=[
+                    {
+                        "role": "user",
+                        "content": _KEYWORDS_PROMPT,
+                        "images": [image_data],
+                    }
+                ],
+            )
+            keywords = response["message"]["content"].strip()
+            # Strip any accidental leading labels like "Keywords:" or bullets
+            keywords = re.sub(r"^[*\-•]?\s*keywords?:\s*", "", keywords, flags=re.IGNORECASE)
+            logger.debug("Auto-generated keywords: %s", keywords)
+            return keywords
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Could not auto-generate keywords: %s", exc)
+            return ""
+
     def analyse(
         self,
         image_path: str | Path,
         context: str = "",
         reference_prices: str = "",
+        scraper=None,
+        extra_keywords: str = "",
     ) -> str:
         """Return a full appraisal string for the supplied image.
+
+        Scraping is performed automatically: the model first identifies the
+        object and generates search keywords from the image, then those
+        keywords (plus any *extra_keywords* supplied by the caller) are used
+        to fetch reference prices from auction sites.  Passing a pre-fetched
+        *reference_prices* string bypasses the automatic scraping step.
 
         Parameters
         ----------
@@ -164,7 +212,15 @@ class AntiqueAnalyzer:
         context:
             Optional free-text description the user provides about the item.
         reference_prices:
-            Formatted string of reference prices scraped from the web.
+            Pre-fetched reference prices string.  When supplied, automatic
+            scraping is skipped.
+        scraper:
+            A ``MultiSourceScraper`` instance.  When ``None`` and
+            *reference_prices* is empty a new ``MultiSourceScraper`` is
+            created automatically.
+        extra_keywords:
+            Additional keywords (e.g. from the user) appended to the
+            auto-generated keywords before searching.
 
         Returns
         -------
@@ -175,6 +231,29 @@ class AntiqueAnalyzer:
 
         self._ensure_model(ollama)
 
+        # ── Step 1: auto-generate keywords and scrape reference prices ──────
+        if not reference_prices.strip():
+            if callable(self.on_pull_progress):
+                self.on_pull_progress("Identifying object for price search…")
+            auto_keywords = self.generate_search_keywords(image_path)
+
+            # Merge auto-generated + user-supplied keywords
+            all_keywords_parts = [p.strip() for p in [auto_keywords, extra_keywords] if p.strip()]
+            search_query = ", ".join(all_keywords_parts)
+
+            if search_query:
+                if callable(self.on_pull_progress):
+                    self.on_pull_progress(f"Searching comparable prices: {search_query[:60]}…")
+                logger.info("Auto-scraping with keywords: %s", search_query)
+                if scraper is None:
+                    from .scraper import MultiSourceScraper  # noqa: PLC0415
+                    scraper = MultiSourceScraper()
+                try:
+                    reference_prices = scraper.get_reference_prices(search_query)
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning("Auto-scrape failed: %s", exc)
+
+        # ── Step 2: full appraisal ───────────────────────────────────────────
         image_data = self._encode_image(image_path)
         template = _USER_TEMPLATE_DEEP if self.deep_thinking else _USER_TEMPLATE_STANDARD
         prompt = template.format(

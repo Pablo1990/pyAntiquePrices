@@ -88,14 +88,14 @@ class App(tk.Tk):
         # Search keywords row
         kw_row = ttk.Frame(top)
         kw_row.pack(fill=tk.X, pady=(0, _PAD))
-        ttk.Label(kw_row, text="Search keywords (optional):").pack(side=tk.LEFT)
+        ttk.Label(kw_row, text="Extra search keywords (optional):").pack(side=tk.LEFT)
         self._keywords_var = tk.StringVar()
         ttk.Entry(kw_row, textvariable=self._keywords_var, width=48).pack(
             side=tk.LEFT, padx=_PAD
         )
         ttk.Label(
             kw_row,
-            text="Searched on auction sites via DuckDuckGo to find comparable prices",
+            text="Keywords are auto-generated from the image; add extras here if needed",
             foreground="grey",
         ).pack(side=tk.LEFT)
 
@@ -216,52 +216,42 @@ class App(tk.Tk):
         deep_thinking: bool,
     ) -> None:
         """Background worker – must not touch Tk widgets directly."""
-        try:
-            reference_prices = ""
-            if keywords:
-                self._after_safe(self._set_status, "Searching for comparable prices…")
-                try:
-                    reference_prices = self._scraper.get_reference_prices(keywords)
-                except Exception as exc:  # noqa: BLE001
-                    logger.warning("Scraper error: %s", exc)
+        self._analyzer.model = model
+        self._analyzer.deep_thinking = deep_thinking
+        self._analyzer.on_pull_progress = self._on_pull_progress
 
-            self._analyzer.model = model
-            self._analyzer.deep_thinking = deep_thinking
-            self._analyzer.on_pull_progress = self._on_pull_progress
+        total = len(images)
+        all_results: list[str] = []
 
-            total = len(images)
-            all_results: list[str] = []
-
-            for idx, img_path in enumerate(images, 1):
-                mode = "deep thinking" if deep_thinking else "standard"
-                self._after_safe(
-                    self._set_status,
-                    f"[{mode}] Analysing image {idx}/{total}: {img_path.name}…",
+        for idx, img_path in enumerate(images, 1):
+            mode = "deep thinking" if deep_thinking else "standard"
+            self._after_safe(
+                self._set_status,
+                f"[{mode}] Analysing image {idx}/{total}: {img_path.name}…",
+            )
+            try:
+                result = self._analyzer.analyse(
+                    img_path,
+                    context=context,
+                    extra_keywords=keywords,
+                    scraper=self._scraper,
                 )
-                try:
-                    result = self._analyzer.analyse(
-                        img_path,
-                        context=context,
-                        reference_prices=reference_prices,
-                    )
-                    all_results.append(
-                        f"{'='*60}\n"
-                        f"Image {idx}/{total}: {img_path.name}\n"
-                        f"{'='*60}\n"
-                        f"{result}\n"
-                    )
-                except Exception as exc:  # noqa: BLE001
-                    all_results.append(
-                        f"{'='*60}\n"
-                        f"Image {idx}/{total}: {img_path.name}  [ERROR]\n"
-                        f"{'='*60}\n"
-                        f"{exc}\n"
-                    )
-                self._after_safe(self._set_progress, idx)
+                all_results.append(
+                    f"{'='*60}\n"
+                    f"Image {idx}/{total}: {img_path.name}\n"
+                    f"{'='*60}\n"
+                    f"{result}\n"
+                )
+            except Exception as exc:  # noqa: BLE001
+                all_results.append(
+                    f"{'='*60}\n"
+                    f"Image {idx}/{total}: {img_path.name}  [ERROR]\n"
+                    f"{'='*60}\n"
+                    f"{exc}\n"
+                )
+            self._after_safe(self._set_progress, idx)
 
-            self._after_safe(self._on_analysis_done, "\n".join(all_results))
-        except Exception as exc:  # noqa: BLE001
-            self._after_safe(self._on_analysis_error, str(exc))
+        self._after_safe(self._on_analysis_done, "\n".join(all_results))
 
     def _on_analysis_done(self, result: str) -> None:
         self._set_result(result)

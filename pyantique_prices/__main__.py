@@ -24,7 +24,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--keywords",
         default="",
-        help="Search keywords for reference prices (CLI mode only).",
+        help="Extra search keywords to supplement the auto-generated ones (CLI mode only).",
     )
     parser.add_argument(
         "--model",
@@ -69,15 +69,13 @@ def _run_cli(args) -> int:
         return 1
 
     scraper = MultiSourceScraper()
-    reference_prices = ""
-    if args.keywords:
-        print(f"Fetching reference prices for: {args.keywords}")
-        try:
-            reference_prices = scraper.get_reference_prices(args.keywords)
-        except Exception as exc:  # noqa: BLE001
-            print(f"Warning: could not fetch reference prices: {exc}", file=sys.stderr)
-
     analyzer = AntiqueAnalyzer(model=args.model, deep_thinking=args.deep_thinking)
+
+    def _on_progress(status: str) -> None:
+        print(f"  {status}", end="\r", flush=True)
+
+    analyzer.on_pull_progress = _on_progress
+
     mode = "deep thinking" if args.deep_thinking else "standard"
     total = len(images)
 
@@ -86,10 +84,15 @@ def _run_cli(args) -> int:
         print(f"Image {idx}/{total}: {img_path}")
         print(f"{'='*60}")
         print(f"Analysing with model '{args.model}' [{mode}]…")
+        print("  Auto-generating search keywords from image…", end="\r", flush=True)
         try:
             result = analyzer.analyse(
-                img_path, context=args.context, reference_prices=reference_prices
+                img_path,
+                context=args.context,
+                extra_keywords=args.keywords,
+                scraper=scraper,
             )
+            print()  # clear progress line
             print("\n--- APPRAISAL ---\n")
             print(result)
         except Exception as exc:  # noqa: BLE001
