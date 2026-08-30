@@ -27,25 +27,34 @@
 ## How it works
 
 ```
-Image file
+Image file + owner context
     │
     ▼
-AntiqueAnalyzer
-    ├─ Step 1 – Auto keyword generation
-    │       └─ Quick LLM call: identifies the object and produces 5-7 search terms
-    ├─ Step 2 – Automatic price scraping
-    │       └─ MultiSourceScraper queries DuckDuckGo → Catawiki / LiveAuctioneers / Invaluable
-    │          (user-supplied extra keywords are merged with the auto-generated ones)
-    └─ Step 3 – Full appraisal
-            └─ Expert appraiser system prompt
-            └─ (Optional) Deep-thinking chain-of-thought prompt
+Pass 1 – Identification (fast)
+    └─ LLM sees image + context → concise identification + 6-8 search keywords
+    │   (model reasons about what it sees and what the owner knows)
+    │
+    ▼
+Automatic price scraping
+    └─ Keywords (Pass-1 + any user extras) → DuckDuckGo
+           → Catawiki / LiveAuctioneers / Invaluable
+    │
+    ▼
+Pass 2 – Deep-thinking appraisal
+    └─ LLM re-examines image with:
+         • Owner context
+         • Pass-1 identification (to build on, not repeat)
+         • Scraped comparable prices
+       Explicitly compares the item against real sold prices and revises
+       its estimate if the market data suggests a different range.
+       Output: full structured appraisal
                     │
                     ▼
             Structured appraisal:
               • Description (type, style, materials)
               • Estimated age / period
               • Condition grade
-              • Price range (auction + retail, EUR)
+              • Price range (auction + retail, EUR) – grounded in real data
               • Key value factors
               • Confidence level
 ```
@@ -277,11 +286,13 @@ When **Deep thinking** is enabled (the default), the model is asked to work thro
 2. **Style and period analysis** — What decorative features narrow the date?
 3. **Material and technique assessment** — How was it made?
 4. **Condition and authenticity** — What wear is visible? Is ageing consistent?
-5. **Market comparables** — What comparable pieces or sales come to mind?
-6. **Synthesis** — Combine all factors into a probability-weighted estimate.
+5. **Market comparables** — Review the scraped reference data: how do the comparable sold prices compare? Revise the estimate if the data suggests a different range.
+6. **Synthesis** — Combine all factors (including real sold prices) into a probability-weighted estimate.
+
+Step 5 now explicitly uses the scraped auction data found in the automatic scraping phase, so the model compares its visual assessment against real market evidence before giving its final price range.
 
 The thinking section is shown in the output so you can review the reasoning.  
-Disable it with `--no-deep-thinking` (CLI) or uncheck the box (GUI) when you need faster results.
+Disable it with `--no-deep-thinking` (CLI) or uncheck the box (GUI) when you need faster results (Pass 1 + scraping still run, only the deep-thinking format changes).
 
 ---
 

@@ -84,7 +84,7 @@ def _run_cli(args) -> int:
         print(f"Image {idx}/{total}: {img_path}")
         print(f"{'='*60}")
         print(f"Analysing with model '{args.model}' [{mode}]…")
-        print("  Auto-generating search keywords from image…", end="\r", flush=True)
+        print(f"  Pass 1 – identifying object…", end="\r", flush=True)
         try:
             result = analyzer.analyse(
                 img_path,
