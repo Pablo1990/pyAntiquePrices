@@ -23,13 +23,17 @@ A Python package to estimate the **price and age** of antiques (art, furniture, 
 
 ## Recommended models
 
+These models are confirmed to work with **Ollama ≥ 0.30** (new llama.cpp backend).  
+⚠️ `llama3.2-vision` uses the `mllama` architecture which is **not** supported by Ollama 0.30+.
+
 | Model | Notes |
 |---|---|
-| `llama3.2-vision` | **Default** – Meta's best locally-runnable vision model |
-| `llava:34b` | Large LLaVA – very capable, requires ~20 GB VRAM |
-| `gemma3` | Google Gemma 3 – strong general reasoning |
-| `mistral-small3.1` | Mistral vision model |
-| `llava` | Original LLaVA – lighter fallback |
+| `minicpm-v` | **Default** – compact, accurate vision + reasoning; works on all Ollama versions |
+| `llava:13b` | LLaVA 13B – strong multimodal, widely supported |
+| `llava` | LLaVA 7B – reliable fallback, small footprint (~4 GB) |
+| `moondream` | Very small but capable vision model (~2 GB) |
+| `gemma3` | Google Gemma 3 vision – good reasoning |
+| `mistral-small3.1` | Mistral vision – capable, medium size |
 
 Any Ollama-compatible model name can be typed in the GUI or passed via `--model`.
 
@@ -61,7 +65,7 @@ pyantique-prices
 pyantique-prices --cli path/to/item.jpg \
     --keywords "silver pocket watch 19th century" \
     --context "Found in an English estate, no hallmarks visible" \
-    --model llama3.2-vision
+    --model minicpm-v
 
 # Entire folder
 pyantique-prices --cli path/to/folder/ --model llama3.2-vision
@@ -78,7 +82,7 @@ from pyantique_prices import AntiqueAnalyzer, MultiSourceScraper
 scraper = MultiSourceScraper()
 prices = scraper.get_reference_prices("Chinese blue and white porcelain vase")
 
-analyzer = AntiqueAnalyzer(model="llama3.2-vision", deep_thinking=True)
+analyzer = AntiqueAnalyzer(model="minicpm-v", deep_thinking=True)
 appraisal = analyzer.analyse(
     "vase.jpg",
     context="No markings on base.",

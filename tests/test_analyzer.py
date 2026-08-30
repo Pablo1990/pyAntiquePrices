@@ -115,18 +115,22 @@ class TestParsePriceRange:
 
 
 class TestAnalyse:
-    def _make_mock_ollama(self, content="This is a fine 19th century vase worth €400-€600.", model="llama3.2-vision"):
+    def _make_mock_ollama(self, content="This is a fine 19th century vase worth €400-€600.", model="minicpm-v"):
         mock_ollama = MagicMock()
         mock_ollama.chat.return_value = {"message": {"content": content}}
-        # Simulate model already present locally
-        mock_ollama.list.return_value = {"models": [{"name": model}]}
+        # Simulate model already present locally (new SDK: object with .models attribute)
+        model_obj = MagicMock()
+        model_obj.model = model
+        list_response = MagicMock()
+        list_response.models = [model_obj]
+        mock_ollama.list.return_value = list_response
         return mock_ollama
 
     def test_analyse_calls_ollama(self):
         mock_ollama = self._make_mock_ollama()
 
         with patch.dict(sys.modules, {"ollama": mock_ollama}):
-            analyzer = AntiqueAnalyzer(model="llama3.2-vision")
+            analyzer = AntiqueAnalyzer(model="minicpm-v")
             result = analyzer.analyse(DUMMY_IMAGE, context="Blue vase")
 
         mock_ollama.chat.assert_called_once()
@@ -176,22 +180,52 @@ class TestAnalyse:
     def test_auto_pulls_missing_model(self):
         mock_ollama = MagicMock()
         mock_ollama.chat.return_value = {"message": {"content": "appraisal"}}
-        # Model is NOT in the local list
-        mock_ollama.list.return_value = {"models": []}
-        mock_ollama.pull.return_value = iter([{"status": "pulling"}, {"status": "success"}])
+        # Model is NOT in the local list (new SDK object style)
+        list_response = MagicMock()
+        list_response.models = []
+        mock_ollama.list.return_value = list_response
+        # pull returns an iterable of progress objects
+        prog = MagicMock()
+        prog.status = "success"
+        mock_ollama.pull.return_value = iter([prog])
 
         with patch.dict(sys.modules, {"ollama": mock_ollama}):
-            analyzer = AntiqueAnalyzer(model="llama3.2-vision")
+            analyzer = AntiqueAnalyzer(model="minicpm-v")
             analyzer.analyse(DUMMY_IMAGE)
 
-        mock_ollama.pull.assert_called_once_with("llama3.2-vision", stream=True)
+        mock_ollama.pull.assert_called_once_with("minicpm-v", stream=True)
         mock_ollama.chat.assert_called_once()
+
+    def test_pull_failure_raises_runtime_error(self):
+        mock_ollama = MagicMock()
+        list_response = MagicMock()
+        list_response.models = []
+        mock_ollama.list.return_value = list_response
+        mock_ollama.pull.side_effect = Exception("connection refused")
+
+        with patch.dict(sys.modules, {"ollama": mock_ollama}):
+            analyzer = AntiqueAnalyzer(model="minicpm-v")
+            with pytest.raises(RuntimeError, match="Failed to download model"):
+                analyzer.analyse(DUMMY_IMAGE)
 
     def test_skips_pull_when_model_present(self):
         mock_ollama = self._make_mock_ollama()
 
         with patch.dict(sys.modules, {"ollama": mock_ollama}):
-            analyzer = AntiqueAnalyzer(model="llama3.2-vision")
+            analyzer = AntiqueAnalyzer(model="minicpm-v")
+            analyzer.analyse(DUMMY_IMAGE)
+
+        mock_ollama.pull.assert_not_called()
+
+    def test_skips_pull_when_model_present_old_sdk_format(self):
+        """Ensure old SDK dict-style list response also works."""
+        mock_ollama = MagicMock()
+        mock_ollama.chat.return_value = {"message": {"content": "ok"}}
+        # Old SDK: plain dict
+        mock_ollama.list.return_value = {"models": [{"name": "minicpm-v"}]}
+
+        with patch.dict(sys.modules, {"ollama": mock_ollama}):
+            analyzer = AntiqueAnalyzer(model="minicpm-v")
             analyzer.analyse(DUMMY_IMAGE)
 
         mock_ollama.pull.assert_not_called()

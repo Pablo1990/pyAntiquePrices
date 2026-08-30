@@ -10,18 +10,19 @@ from typing import Optional
 
 logger = logging.getLogger(__name__)
 
-# Best locally-runnable vision models in roughly descending quality order.
-# Users can pick any Ollama-compatible model.
+# Vision models confirmed to work with Ollama ≥ 0.30 (new llama.cpp backend).
+# Note: llama3.2-vision uses the 'mllama' architecture which is NOT supported
+# by Ollama 0.30+.  The models below all use supported architectures.
 RECOMMENDED_MODELS = [
-    "llama3.2-vision",       # Meta – excellent vision + reasoning
-    "deepseek-r1",           # DeepSeek – strong chain-of-thought reasoning (use with llava for images)
-    "llava:34b",             # LLaVA large – strong multimodal
-    "llava",                 # LLaVA base – fallback
-    "gemma3",                # Google Gemma 3 – good general reasoning
-    "mistral-small3.1",      # Mistral – capable vision
+    "minicpm-v",             # Best overall: compact, accurate vision+reasoning, all Ollama versions
+    "llava:13b",             # LLaVA 13B – strong multimodal, widely supported
+    "llava",                 # LLaVA 7B – reliable fallback, small footprint
+    "moondream",             # Tiny but capable vision model
+    "gemma3",                # Google Gemma 3 (vision variant) – good reasoning
+    "mistral-small3.1",      # Mistral vision – capable, medium size
 ]
 
-_DEFAULT_MODEL = "llama3.2-vision"
+_DEFAULT_MODEL = "minicpm-v"
 
 # -------------------------------------------------------------------------
 # Prompts
@@ -126,7 +127,10 @@ class AntiqueAnalyzer:
     Parameters
     ----------
     model:
-        The Ollama model to use (default: ``llama3.2-vision``).
+        The Ollama model to use (default: ``minicpm-v``).  Any multimodal
+        model available in your local Ollama installation can be used.
+        See ``RECOMMENDED_MODELS`` for a list of models known to work with
+        Ollama ≥ 0.30.
     deep_thinking:
         When ``True`` the prompt explicitly asks the model to show its
         chain-of-thought before the final answer.
@@ -193,26 +197,61 @@ class AntiqueAnalyzer:
         return response["message"]["content"]
 
     def _ensure_model(self, ollama) -> None:
-        """Pull *self.model* if it is not already available locally."""
+        """Pull *self.model* if it is not already available locally.
+
+        Raises
+        ------
+        RuntimeError
+            If the pull fails so the error is visible to the caller rather
+            than being silently swallowed.
+        """
         try:
-            local_models = [m["name"] for m in ollama.list().get("models", [])]
-
-            def _base(name: str) -> str:
-                return name.split(":")[0]
-
-            if not any(_base(m) == _base(self.model) for m in local_models):
-                logger.info("Model '%s' not found locally – pulling from Ollama…", self.model)
-                print(f"Downloading model '{self.model}' – this may take a few minutes…")
-                for progress in ollama.pull(self.model, stream=True):
-                    status = progress.get("status", "")
-                    if status:
-                        print(f"  {status}", end="\r", flush=True)
-                        if callable(self.on_pull_progress):
-                            self.on_pull_progress(status)
-                print()  # newline after progress
-                logger.info("Model '%s' pulled successfully.", self.model)
+            # ollama.list() returns a ListResponse object in newer SDK versions
+            # and a plain dict in older ones – handle both.
+            list_response = ollama.list()
+            if hasattr(list_response, "models"):
+                # New SDK: ListResponse with .models attribute (list of Model objects)
+                local_names = [
+                    getattr(m, "model", None) or getattr(m, "name", None) or str(m)
+                    for m in list_response.models
+                ]
+            else:
+                # Old SDK: plain dict {"models": [{"name": "..."}]}
+                local_names = [m.get("name", "") for m in list_response.get("models", [])]
         except Exception as exc:  # noqa: BLE001
-            logger.debug("Could not verify/pull model: %s", exc)
+            # Ollama is not running or unreachable – let chat() surface the error
+            logger.debug("Could not list local models: %s", exc)
+            return
+
+        def _base(name: str) -> str:
+            return (name or "").split(":")[0].lower()
+
+        if any(_base(n) == _base(self.model) for n in local_names):
+            return  # model already present
+
+        logger.info("Model '%s' not found locally – pulling from Ollama…", self.model)
+        msg = f"Downloading model '{self.model}' – this may take a few minutes…"
+        print(msg)
+        if callable(self.on_pull_progress):
+            self.on_pull_progress(msg)
+        try:
+            for progress in ollama.pull(self.model, stream=True):
+                # progress may be a ProgressResponse object or a plain dict
+                if hasattr(progress, "status"):
+                    status = progress.status or ""
+                else:
+                    status = progress.get("status", "") if isinstance(progress, dict) else ""
+                if status:
+                    print(f"  {status}", end="\r", flush=True)
+                    if callable(self.on_pull_progress):
+                        self.on_pull_progress(status)
+            print()  # newline after progress
+            logger.info("Model '%s' pulled successfully.", self.model)
+        except Exception as exc:
+            raise RuntimeError(
+                f"Failed to download model '{self.model}': {exc}\n"
+                "Run `ollama pull " + self.model + "` manually to install it."
+            ) from exc
 
     def list_available_models(self) -> list[str]:
         """Return a list of locally available Ollama model names."""

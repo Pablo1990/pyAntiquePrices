@@ -28,8 +28,8 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument(
         "--model",
-        default="llama3.2-vision",
-        help="Ollama model to use (default: llama3.2-vision).",
+        default="minicpm-v",
+        help="Ollama model to use (default: minicpm-v).",
     )
     parser.add_argument(
         "--deep-thinking",
