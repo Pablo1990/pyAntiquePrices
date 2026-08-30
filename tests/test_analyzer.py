@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import base64
 import sys
+import types
 from pathlib import Path
 from unittest.mock import MagicMock, call, patch
 
@@ -57,6 +58,109 @@ def create_dummy_image(tmp_path_factory):
 # ---------------------------------------------------------------------------
 
 from pyantique_prices.analyzer import AntiqueAnalyzer
+
+
+class _FakeTensor:
+    def __init__(self, values):
+        self.values = values
+        self.shape = (1, len(values))
+
+    def to(self, device):
+        self.device = device
+        return self
+
+    def __getitem__(self, key):
+        return self.values[key]
+
+
+class _FakeTokenizer:
+    def __init__(self, decoded_text="hf appraisal"):
+        self.decoded_text = decoded_text
+        self.pad_token_id = None
+        self.eos_token_id = 99
+        self.eos_token = "<eos>"
+        self.pad_token = None
+        self.last_prompt = ""
+        self.last_messages = None
+
+    def apply_chat_template(self, messages, tokenize=False, add_generation_prompt=False):
+        self.last_messages = messages
+        return "FORMATTED PROMPT"
+
+    def __call__(self, text, return_tensors="pt"):
+        self.last_prompt = text
+        return {
+            "input_ids": _FakeTensor([11, 12, 13]),
+            "attention_mask": _FakeTensor([1, 1, 1]),
+        }
+
+    def decode(self, tokens, skip_special_tokens=True):
+        return self.decoded_text
+
+
+class _FakeModel:
+    def __init__(self):
+        self.device = "cpu"
+        self.loaded_adapter = None
+        self.generate_kwargs = None
+        self.eval_called = False
+
+    def to(self, device):
+        self.device = device
+        return self
+
+    def eval(self):
+        self.eval_called = True
+        return self
+
+    def generate(self, **kwargs):
+        self.generate_kwargs = kwargs
+        return [[11, 12, 13, 21, 22]]
+
+
+class _FakeInferenceMode:
+    def __enter__(self):
+        return None
+
+    def __exit__(self, exc_type, exc, tb):
+        return False
+
+
+def _make_fake_huggingface_modules(decoded_text="hf appraisal"):
+    tokenizer = _FakeTokenizer(decoded_text=decoded_text)
+    model = _FakeModel()
+
+    class _FakeAutoTokenizer:
+        @staticmethod
+        def from_pretrained(model_name):
+            tokenizer.model_name = model_name
+            return tokenizer
+
+    class _FakeAutoModelForCausalLM:
+        @staticmethod
+        def from_pretrained(model_name, **kwargs):
+            model.model_name = model_name
+            model.load_kwargs = kwargs
+            return model
+
+    class _FakePeftModel:
+        @staticmethod
+        def from_pretrained(base_model, adapter_name):
+            base_model.loaded_adapter = adapter_name
+            return base_model
+
+    fake_transformers = types.SimpleNamespace(
+        AutoTokenizer=_FakeAutoTokenizer,
+        AutoModelForCausalLM=_FakeAutoModelForCausalLM,
+        tokenizer_instance=tokenizer,
+        model_instance=model,
+    )
+    fake_peft = types.SimpleNamespace(PeftModel=_FakePeftModel)
+    fake_torch = types.SimpleNamespace(
+        cuda=types.SimpleNamespace(is_available=lambda: False),
+        inference_mode=lambda: _FakeInferenceMode(),
+    )
+    return fake_transformers, fake_peft, fake_torch
 
 
 class TestEncodeImage:
@@ -291,6 +395,97 @@ class TestAnalyse:
 
         assert result == "text-only appraisal"
         assert "images" not in mock_ollama.chat.call_args_list[-1].kwargs["messages"][1]
+
+    def test_huggingface_reasoning_with_peft_adapter(self):
+        mock_ollama = self._make_mock_ollama(models=["minicpm-v"])
+        mock_ollama.chat.return_value = {
+            "message": {"content": "Porcelain vase.\n---\nporcelain vase, qing"}
+        }
+        fake_transformers, fake_peft, fake_torch = _make_fake_huggingface_modules(
+            decoded_text="hf appraisal"
+        )
+
+        with patch.dict(
+            sys.modules,
+            {
+                "ollama": mock_ollama,
+                "transformers": fake_transformers,
+                "peft": fake_peft,
+                "torch": fake_torch,
+            },
+        ):
+            analyzer = AntiqueAnalyzer(
+                model="minicpm-v",
+                reasoning_backend="huggingface",
+                reasoning_model="meta-llama/Meta-Llama-3.1-8B",
+                reasoning_adapter="jordanmatsumoto/pricing-specialist",
+            )
+            result = analyzer.analyse(DUMMY_IMAGE, context="Estate find")
+
+        assert result == "hf appraisal"
+        assert mock_ollama.chat.call_count == 1
+        assert fake_transformers.model_instance.model_name == "meta-llama/Meta-Llama-3.1-8B"
+        assert fake_transformers.model_instance.loaded_adapter == "jordanmatsumoto/pricing-specialist"
+        assert fake_transformers.model_instance.eval_called is True
+        assert fake_transformers.model_instance.generate_kwargs["max_new_tokens"] == 768
+        assert fake_transformers.tokenizer_instance.last_messages[0]["role"] == "system"
+
+    def test_reasoning_adapter_switches_backend_to_huggingface(self):
+        analyzer = AntiqueAnalyzer(
+            model="minicpm-v",
+            reasoning_model="meta-llama/Meta-Llama-3.1-8B",
+            reasoning_adapter="jordanmatsumoto/pricing-specialist",
+        )
+
+        assert analyzer.reasoning_backend == "huggingface"
+
+    def test_huggingface_reasoning_missing_dependencies_raises_runtime_error(self):
+        mock_ollama = self._make_mock_ollama(models=["minicpm-v"])
+        mock_ollama.chat.return_value = {
+            "message": {"content": "Porcelain vase.\n---\nporcelain vase, qing"}
+        }
+
+        with patch.dict(
+            sys.modules,
+            {
+                "ollama": mock_ollama,
+                "transformers": None,
+                "peft": None,
+                "torch": None,
+            },
+        ):
+            analyzer = AntiqueAnalyzer(
+                model="minicpm-v",
+                reasoning_backend="huggingface",
+                reasoning_model="meta-llama/Meta-Llama-3.1-8B",
+            )
+            with pytest.raises(RuntimeError, match="Install them with"):
+                analyzer.analyse(DUMMY_IMAGE)
+
+    def test_huggingface_reasoning_missing_peft_raises_runtime_error(self):
+        mock_ollama = self._make_mock_ollama(models=["minicpm-v"])
+        mock_ollama.chat.return_value = {
+            "message": {"content": "Porcelain vase.\n---\nporcelain vase, qing"}
+        }
+        fake_transformers, _, fake_torch = _make_fake_huggingface_modules()
+
+        with patch.dict(
+            sys.modules,
+            {
+                "ollama": mock_ollama,
+                "transformers": fake_transformers,
+                "peft": None,
+                "torch": fake_torch,
+            },
+        ):
+            analyzer = AntiqueAnalyzer(
+                model="minicpm-v",
+                reasoning_backend="huggingface",
+                reasoning_model="meta-llama/Meta-Llama-3.1-8B",
+                reasoning_adapter="jordanmatsumoto/pricing-specialist",
+            )
+            with pytest.raises(RuntimeError, match="PEFT adapters require"):
+                analyzer.analyse(DUMMY_IMAGE)
 
     def test_other_error_reraises_unchanged(self):
         """Non-multimodal errors are re-raised as-is (not wrapped in ValueError)."""

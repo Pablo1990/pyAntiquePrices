@@ -71,6 +71,7 @@ Scraping is fully automatic — you don't need to supply any keywords unless you
 | **Python ≥ 3.9** | |
 | **[Ollama](https://ollama.com/)** | Must be installed and running. Download from [ollama.com](https://ollama.com/download). |
 | **A vision-capable model** | Auto-downloaded on first use, or run `ollama pull minicpm-v` in advance. |
+| **Optional: Hugging Face reasoning stack** | Needed only if you want Pass 2 price estimation via `transformers` + `peft` instead of Ollama. |
 | `ollama` Python SDK | Installed automatically via `pip`. |
 | `requests`, `beautifulsoup4` | Web scraper (installed automatically). |
 | `Pillow` | Image utilities (installed automatically). |
@@ -87,6 +88,9 @@ cd pyAntiquePrices
 
 # 2. Install the package (editable mode recommended for development)
 pip install -e .
+
+# Optional: enable Hugging Face + PEFT for Pass 2 reasoning
+pip install -e ".[hf]"
 
 # 3. Start Ollama (if not already running)
 ollama serve          # macOS/Linux background daemon
@@ -117,8 +121,9 @@ The graphical interface opens immediately.
 
 2. **Choose the two models**  
    **Vision model (Pass 1)** is pre-populated with recommended vision models and must support images.  
-   **Reasoning model (Pass 2)** can be the same model or a separate text-focused model for valuation.  
-   You can also type any Ollama model name directly.  
+   **Reasoning backend (Pass 2)** can be either **Ollama** or **Hugging Face**.  
+   **Reasoning model (Pass 2)** can be the same Ollama model, a text-focused Ollama model, or a Hugging Face base-model repo id.  
+   If you use Hugging Face, you can also provide an optional PEFT adapter such as `jordanmatsumoto/pricing-specialist`.  
    If you enter a Pass-1 model that is not in the recommended list, a warning dialog will ask you to confirm.
 
 3. **Enable Deep thinking** *(recommended)*  
@@ -152,6 +157,13 @@ pyantique-prices --cli photo.jpg --model llava:13b
 # Use separate models for vision and valuation
 pyantique-prices --cli photo.jpg --model minicpm-v --reasoning-model qwen3:8b
 
+# Use a Hugging Face PEFT model for Pass 2 price estimation
+pyantique-prices --cli photo.jpg \
+    --model minicpm-v \
+    --reasoning-backend huggingface \
+    --reasoning-model meta-llama/Meta-Llama-3.1-8B \
+    --reasoning-adapter jordanmatsumoto/pricing-specialist
+
 # Disable deep thinking for a faster pass
 pyantique-prices --cli photo.jpg --no-deep-thinking
 
@@ -171,7 +183,9 @@ pyantique-prices --cli /path/to/antiques/ \
 |---|---|---|
 | `--cli IMAGE_OR_FOLDER` | — | Path to an image file or a directory of images. |
 | `--model MODEL` | `minicpm-v` | Pass-1 vision model. Must support vision. |
-| `--reasoning-model MODEL` | same as `--model` | Pass-2 reasoning / price-estimation model. Can be a text-only model. |
+| `--reasoning-model MODEL` | same as `--model` | Pass-2 reasoning model. Use an Ollama name or a Hugging Face base-model repo id. |
+| `--reasoning-backend BACKEND` | `ollama` | Pass-2 backend: `ollama` or `huggingface`. |
+| `--reasoning-adapter ADAPTER` | *(empty)* | Optional Hugging Face PEFT adapter for Pass 2. |
 | `--keywords KEYWORDS` | *(empty)* | Extra search keywords merged with auto-generated ones. |
 | `--context CONTEXT` | *(empty)* | Free-text context about the item(s). |
 | `--deep-thinking` | on | Enable chain-of-thought reasoning (default). |
@@ -193,7 +207,9 @@ prices = scraper.get_reference_prices("Chinese blue and white porcelain vase 18t
 # 2. Analyse the image
 analyzer = AntiqueAnalyzer(
     model="minicpm-v",     # Pass 1 vision model
-    reasoning_model="qwen3:8b",  # optional Pass 2 reasoner
+    reasoning_model="meta-llama/Meta-Llama-3.1-8B",  # Pass 2 base model
+    reasoning_backend="huggingface",
+    reasoning_adapter="jordanmatsumoto/pricing-specialist",
     deep_thinking=True,    # chain-of-thought reasoning
 )
 appraisal = analyzer.analyse(
@@ -249,6 +265,10 @@ For **Pass 2 reasoning**, you can keep the same model or choose a separate
 text-focused model if you prefer. Good starting points are `qwen3:8b`,
 `llama3.1:8b`, or another reasoning model already available in your local
 Ollama setup.
+
+If you prefer a fine-tuned Hugging Face reasoner, install the optional `hf`
+extra and set `reasoning_backend="huggingface"` with a base model plus an
+optional PEFT adapter.
 
 ---
 
