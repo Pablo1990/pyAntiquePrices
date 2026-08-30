@@ -5,7 +5,7 @@ from __future__ import annotations
 import base64
 import sys
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock, call, patch
 
 import pytest
 
@@ -115,30 +115,43 @@ class TestParsePriceRange:
 
 
 class TestAnalyse:
-    def _make_mock_ollama(self, content="This is a fine 19th century vase worth €400-€600.", model="minicpm-v"):
+    def _make_mock_ollama(self, content="This is a fine 19th century vase worth €400-€600.", models=None):
         mock_ollama = MagicMock()
         mock_ollama.chat.return_value = {"message": {"content": content}}
         # Simulate model already present locally (new SDK: object with .models attribute)
-        model_obj = MagicMock()
-        model_obj.model = model
         list_response = MagicMock()
-        list_response.models = [model_obj]
+        list_response.models = []
+        for model in models or ["minicpm-v"]:
+            model_obj = MagicMock()
+            model_obj.model = model
+            list_response.models.append(model_obj)
         mock_ollama.list.return_value = list_response
         return mock_ollama
 
-    def test_analyse_calls_ollama(self):
-        mock_ollama = self._make_mock_ollama()
+    def test_analyse_uses_separate_models_for_each_pass(self):
+        mock_ollama = self._make_mock_ollama(models=["minicpm-v", "qwen3:8b"])
+        mock_ollama.chat.side_effect = [
+            {"message": {"content": "Spanish ceramic bowl.\n---\nspanish ceramic bowl, talavera, glazed earthenware"}},
+            {"message": {"content": "This is a fine 19th century vase worth €400-€600."}},
+        ]
 
         with patch.dict(sys.modules, {"ollama": mock_ollama}):
-            analyzer = AntiqueAnalyzer(model="minicpm-v")
+            analyzer = AntiqueAnalyzer(model="minicpm-v", reasoning_model="qwen3:8b")
             result = analyzer.analyse(DUMMY_IMAGE, context="Blue vase")
 
-        # chat is called at least twice: once for keyword generation, once for appraisal
-        assert mock_ollama.chat.call_count >= 2
+        assert mock_ollama.chat.call_count == 2
+        assert mock_ollama.chat.call_args_list[0].kwargs["model"] == "minicpm-v"
+        assert mock_ollama.chat.call_args_list[1].kwargs["model"] == "qwen3:8b"
+        assert "images" in mock_ollama.chat.call_args_list[0].kwargs["messages"][1]
+        assert "images" not in mock_ollama.chat.call_args_list[1].kwargs["messages"][1]
         assert "vase" in result.lower()
 
     def test_analyse_uses_context_and_prices(self):
         mock_ollama = self._make_mock_ollama(content="appraisal text")
+        mock_ollama.chat.side_effect = [
+            {"message": {"content": "French clock.\n---\nfrench clock, gilt bronze mantel clock"}},
+            {"message": {"content": "appraisal text"}},
+        ]
 
         with patch.dict(sys.modules, {"ollama": mock_ollama}):
             analyzer = AntiqueAnalyzer()
@@ -148,16 +161,20 @@ class TestAnalyse:
                 reference_prices="Similar clocks: 300-500 EUR",
             )
 
-        # When reference_prices is pre-supplied, only the appraisal chat call is made
-        mock_ollama.chat.assert_called_once()
-        call_args = mock_ollama.chat.call_args
-        messages = call_args.kwargs.get("messages") or call_args.args[0].get("messages", []) if call_args.args else call_args.kwargs["messages"]
+        assert mock_ollama.chat.call_count == 2
+        call_args = mock_ollama.chat.call_args_list[-1]
+        messages = call_args.kwargs["messages"]
         user_message = next(m for m in messages if m["role"] == "user")
         assert "grandmother" in user_message["content"]
         assert "300-500" in user_message["content"]
+        assert "French clock" in user_message["content"]
 
     def test_deep_thinking_prompt_includes_thinking_section(self):
         mock_ollama = self._make_mock_ollama(content="deep result")
+        mock_ollama.chat.side_effect = [
+            {"message": {"content": "Porcelain vase.\n---\nporcelain vase, qing"}},
+            {"message": {"content": "deep result"}},
+        ]
 
         with patch.dict(sys.modules, {"ollama": mock_ollama}):
             analyzer = AntiqueAnalyzer(deep_thinking=True)
@@ -171,6 +188,10 @@ class TestAnalyse:
 
     def test_standard_prompt_no_thinking_section(self):
         mock_ollama = self._make_mock_ollama(content="standard result")
+        mock_ollama.chat.side_effect = [
+            {"message": {"content": "Porcelain vase.\n---\nporcelain vase, qing"}},
+            {"message": {"content": "standard result"}},
+        ]
 
         with patch.dict(sys.modules, {"ollama": mock_ollama}):
             analyzer = AntiqueAnalyzer(deep_thinking=False)
@@ -195,10 +216,12 @@ class TestAnalyse:
         mock_ollama.pull.return_value = iter([prog])
 
         with patch.dict(sys.modules, {"ollama": mock_ollama}):
-            analyzer = AntiqueAnalyzer(model="minicpm-v")
+            analyzer = AntiqueAnalyzer(model="minicpm-v", reasoning_model="qwen3:8b")
             analyzer.analyse(DUMMY_IMAGE)
 
-        mock_ollama.pull.assert_called_once_with("minicpm-v", stream=True)
+        mock_ollama.pull.assert_has_calls(
+            [call("minicpm-v", stream=True), call("qwen3:8b", stream=True)]
+        )
         assert mock_ollama.chat.call_count >= 1
 
     def test_pull_failure_raises_runtime_error(self):
@@ -209,15 +232,19 @@ class TestAnalyse:
         mock_ollama.pull.side_effect = Exception("connection refused")
 
         with patch.dict(sys.modules, {"ollama": mock_ollama}):
-            analyzer = AntiqueAnalyzer(model="minicpm-v")
+            analyzer = AntiqueAnalyzer(model="minicpm-v", reasoning_model="qwen3:8b")
             with pytest.raises(RuntimeError, match="Failed to download model"):
                 analyzer.analyse(DUMMY_IMAGE)
 
     def test_skips_pull_when_model_present(self):
-        mock_ollama = self._make_mock_ollama()
+        mock_ollama = self._make_mock_ollama(models=["minicpm-v", "qwen3:8b"])
+        mock_ollama.chat.side_effect = [
+            {"message": {"content": "Porcelain vase.\n---\nporcelain vase, qing"}},
+            {"message": {"content": "ok"}},
+        ]
 
         with patch.dict(sys.modules, {"ollama": mock_ollama}):
-            analyzer = AntiqueAnalyzer(model="minicpm-v")
+            analyzer = AntiqueAnalyzer(model="minicpm-v", reasoning_model="qwen3:8b")
             analyzer.analyse(DUMMY_IMAGE)
 
         mock_ollama.pull.assert_not_called()
@@ -227,10 +254,14 @@ class TestAnalyse:
         mock_ollama = MagicMock()
         mock_ollama.chat.return_value = {"message": {"content": "ok"}}
         # Old SDK: plain dict
-        mock_ollama.list.return_value = {"models": [{"name": "minicpm-v"}]}
+        mock_ollama.list.return_value = {"models": [{"name": "minicpm-v"}, {"name": "qwen3:8b"}]}
+        mock_ollama.chat.side_effect = [
+            {"message": {"content": "Porcelain vase.\n---\nporcelain vase, qing"}},
+            {"message": {"content": "ok"}},
+        ]
 
         with patch.dict(sys.modules, {"ollama": mock_ollama}):
-            analyzer = AntiqueAnalyzer(model="minicpm-v")
+            analyzer = AntiqueAnalyzer(model="minicpm-v", reasoning_model="qwen3:8b")
             analyzer.analyse(DUMMY_IMAGE)
 
         mock_ollama.pull.assert_not_called()
@@ -246,6 +277,20 @@ class TestAnalyse:
             analyzer = AntiqueAnalyzer(model="gpt-oss:20b")
             with pytest.raises(ValueError, match="does not support image"):
                 analyzer.analyse(DUMMY_IMAGE)
+
+    def test_reasoning_model_can_be_text_only(self):
+        mock_ollama = self._make_mock_ollama(models=["minicpm-v", "gpt-oss:20b"])
+        mock_ollama.chat.side_effect = [
+            {"message": {"content": "Porcelain vase.\n---\nporcelain vase, qing"}},
+            {"message": {"content": "text-only appraisal"}},
+        ]
+
+        with patch.dict(sys.modules, {"ollama": mock_ollama}):
+            analyzer = AntiqueAnalyzer(model="minicpm-v", reasoning_model="gpt-oss:20b")
+            result = analyzer.analyse(DUMMY_IMAGE)
+
+        assert result == "text-only appraisal"
+        assert "images" not in mock_ollama.chat.call_args_list[-1].kwargs["messages"][1]
 
     def test_other_error_reraises_unchanged(self):
         """Non-multimodal errors are re-raised as-is (not wrapped in ValueError)."""

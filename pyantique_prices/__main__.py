@@ -29,7 +29,12 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--model",
         default="minicpm-v",
-        help="Ollama model to use (default: minicpm-v).",
+        help="Ollama vision model for Pass 1 image analysis (default: minicpm-v).",
+    )
+    parser.add_argument(
+        "--reasoning-model",
+        default=None,
+        help="Ollama model for Pass 2 reasoning and price estimation (default: same as --model).",
     )
     parser.add_argument(
         "--deep-thinking",
@@ -69,7 +74,11 @@ def _run_cli(args) -> int:
         return 1
 
     scraper = MultiSourceScraper()
-    analyzer = AntiqueAnalyzer(model=args.model, deep_thinking=args.deep_thinking)
+    analyzer = AntiqueAnalyzer(
+        model=args.model,
+        reasoning_model=args.reasoning_model,
+        deep_thinking=args.deep_thinking,
+    )
 
     def _on_progress(status: str) -> None:
         print(f"  {status}", end="\r", flush=True)
@@ -83,7 +92,11 @@ def _run_cli(args) -> int:
         print(f"\n{'='*60}")
         print(f"Image {idx}/{total}: {img_path}")
         print(f"{'='*60}")
-        print(f"Analysing with model '{args.model}' [{mode}]…")
+        reasoning_model = args.reasoning_model or args.model
+        print(
+            f"Analysing with vision model '{args.model}' and reasoning model "
+            f"'{reasoning_model}' [{mode}]…"
+        )
         print(f"  Pass 1 – identifying object…", end="\r", flush=True)
         try:
             result = analyzer.analyse(

@@ -60,6 +60,20 @@ class TestDuckDuckGoParseResults:
         scraper._fetch.assert_called_once()
         assert result == ""
 
+    def test_search_query_prioritises_spanish_marketplaces(self):
+        scraper = DuckDuckGoScraper()
+        mock_rp = MagicMock()
+        mock_rp.can_fetch.return_value = True
+        scraper._robots = mock_rp
+        scraper._fetch = MagicMock(return_value="<html></html>")
+
+        scraper.get_reference_prices("pocket watch")
+
+        fetch_url = scraper._fetch.call_args.args[0]
+        assert "todocoleccion.net" in fetch_url
+        assert "setdart.com" in fetch_url
+        assert "spain" in fetch_url
+
 
 class TestMultiSourceScraper:
     def test_returns_duckduckgo_result(self):

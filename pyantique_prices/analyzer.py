@@ -43,10 +43,11 @@ not "a bowl".
 
 PART B – Search keywords (one line, comma-separated, no explanation):
 List 6-8 auction-specialist search keywords that would find the most \
-comparable sold items on platforms such as Catawiki, LiveAuctioneers or \
-Invaluable. Derive these from your identification above PLUS the owner's \
-context. Include: object type, cultural origin, period/style, main material, \
-distinctive feature, and (if relevant) any maker or school.
+comparable sold items on Spanish and European auction platforms such as \
+Todocoleccion, Setdart, Catawiki, LiveAuctioneers or Invaluable. Derive these \
+from your identification above PLUS the owner's context. Include: object type, \
+cultural origin, period/style, main material, distinctive feature, and (if \
+relevant) any maker or school.
 Example: Chinese blue and white porcelain bowl, Kangxi period, export ware, \
 floral medallion, 18th century, Qing dynasty"""
 
@@ -63,12 +64,19 @@ When you examine an image you follow a rigorous methodology:
   • Compare with known reference pieces and market sales data you have memorised.
   • Apply current market conditions: collector demand, rarity, provenance weight.
 
-You ALWAYS reason step-by-step before giving a final answer, explicitly showing \
-your chain of thought so that the reasoning can be verified. \
-Your final appraisal is structured, specific and justified by visible evidence."""
+When estimating value you prioritise the current Spanish market first, then \
+broader European comparables, and always quote prices in EUR.
+
+Your final appraisal is structured, specific and justified by the supplied \
+visual evidence and comparable-market data."""
 
 _USER_TEMPLATE_STANDARD = """\
-Please examine the antique item in this image and provide a detailed appraisal.
+Use the visual analysis from Pass 1 together with the owner's context and the \
+market comparables below to provide a detailed appraisal focused on the Spanish \
+market.
+
+Initial visual analysis from the vision model:
+{identification}
 
 Additional context provided by the owner:
 {context}
@@ -84,24 +92,30 @@ visual clues that led you to this conclusion.
 3. **Condition Assessment**: Visible condition issues (chips, cracks, fading, \
 restorations, missing parts); overall grade (Excellent / Good / Fair / Poor).
 4. **Estimated Price Range**: Realistic EUR market range, separately for:
-   - Auction estimate (hammer price at a major house)
-   - Retail / dealer price
+   - Auction estimate (hammer price in the Spanish market where possible)
+   - Retail / dealer price in Spain
    Justify the range with reference to the condition and comparable sales.
 5. **Key Value Factors**: Top 3-5 factors that raise or lower the value of \
 this specific piece.
 6. **Confidence Level**: Low / Medium / High – explain what additional \
 information would increase your confidence.
 
-Be specific and cite observable evidence from the image for every claim."""
+Be specific and cite the Pass-1 visual evidence and the comparable market data \
+for every claim."""
 
 _USER_TEMPLATE_DEEP = """\
-Please examine the antique item in this image. \
-Before giving your final structured appraisal, work through the following \
-reasoning steps explicitly (this "thinking" section will be shown to the user):
+Use the visual analysis from Pass 1 together with the owner's context and the \
+market comparables below. Before giving your final structured appraisal, work \
+through the following reasoning steps explicitly (this "thinking" section will \
+be shown to the user):
+
+Initial visual analysis from the vision model:
+{identification}
 
 <thinking>
 Step 1 – Object identification:
-  What is the most likely object type? List alternatives and rule them out.
+  Based on the visual analysis, what is the most likely object type? List \
+alternatives and rule them out.
 
 Step 2 – Style and period analysis:
   What stylistic features narrow the period? Consider form, decoration, \
@@ -122,7 +136,8 @@ condition? Are the prices consistent with your initial assessment? \
 Revise your estimate if the data suggests a different range.
 
 Step 6 – Synthesis:
-  Combine all the above into a probability-weighted estimate of age and value.
+  Combine all the above into a probability-weighted estimate of age and value, \
+with the Spanish market as the primary benchmark.
 </thinking>
 
 After the thinking section, provide your final appraisal:
@@ -139,22 +154,26 @@ Reference data found online for similar items:
 2. **Estimated Age**: Most likely decade or period, justified by visual evidence.
 3. **Condition Assessment**: Visible issues; overall grade (Excellent/Good/Fair/Poor).
 4. **Estimated Price Range**:
-   - Auction estimate: …
-   - Retail / dealer price: …
+   - Auction estimate in Spain: …
+   - Retail / dealer price in Spain: …
 5. **Key Value Factors**: Top 3-5 factors raising or lowering value.
 6. **Confidence Level**: Low / Medium / High – what would raise it?"""
 
 
 class AntiqueAnalyzer:
-    """Analyse antique images with a local Ollama vision model.
+    """Analyse antique images with local Ollama models.
 
     Parameters
     ----------
     model:
-        The Ollama model to use (default: ``minicpm-v``).  Any multimodal
-        model available in your local Ollama installation can be used.
+        The Pass-1 Ollama vision model to use (default: ``minicpm-v``).  Any
+        multimodal model available in your local Ollama installation can be used.
         See ``RECOMMENDED_MODELS`` for a list of models known to work with
         Ollama ≥ 0.30.
+    reasoning_model:
+        Optional Pass-2 Ollama reasoning model.  Defaults to the same value as
+        *model*.  This can be another vision model or a text-only model because
+        Pass 2 operates on the Pass-1 visual summary plus scraped comparables.
     deep_thinking:
         When ``True`` the prompt explicitly asks the model to show its
         chain-of-thought before the final answer.
@@ -163,9 +182,11 @@ class AntiqueAnalyzer:
     def __init__(
         self,
         model: str = _DEFAULT_MODEL,
+        reasoning_model: str | None = None,
         deep_thinking: bool = True,
     ) -> None:
         self.model = model
+        self.reasoning_model = reasoning_model or model
         self.deep_thinking = deep_thinking
         self.on_pull_progress = None  # optional callable(status: str)
 
@@ -229,6 +250,10 @@ class AntiqueAnalyzer:
             logger.debug("Pass-1 keywords: %s", keywords)
             return identification, keywords
         except Exception as exc:  # noqa: BLE001
+            try:
+                self._raise_if_not_vision(exc)
+            except ValueError:
+                raise
             logger.warning("Pass-1 identification failed: %s", exc)
             return "", ""
 
@@ -260,13 +285,13 @@ class AntiqueAnalyzer:
         *extra_keywords*) are used to fetch comparable prices from auction
         sites via DuckDuckGo.
 
-        **Pass 2** (deep): the model re-examines the image with the scraped
-        prices injected into the prompt.  It explicitly compares its initial
+        **Pass 2** (deep): the reasoning model uses the Pass-1 identification
+        plus the scraped prices.  It explicitly compares the initial
         identification against the market data and revises if needed, then
         produces the final structured appraisal.
 
-        Passing a pre-fetched *reference_prices* string bypasses Passes 1 and
-        the scraping step, going straight to Pass 2.
+        Passing a pre-fetched *reference_prices* string bypasses the scraping
+        step, but Pass 1 still runs so Pass 2 receives a visual identification.
 
         Parameters
         ----------
@@ -287,20 +312,22 @@ class AntiqueAnalyzer:
         Returns
         -------
         str
-            The model's appraisal text, prefixed with the Pass-1
-            identification block.
+            The reasoning model's appraisal text.
         """
         import ollama  # imported lazily so the package loads without ollama running
 
-        self._ensure_model(ollama)
+        self._ensure_model(ollama, self.model)
+        if self.reasoning_model != self.model:
+            self._ensure_model(ollama, self.reasoning_model)
 
         # ── Pass 1: identify + generate search keywords ──────────────────────
-        identification = ""
-        if not reference_prices.strip():
-            if callable(self.on_pull_progress):
-                self.on_pull_progress("Pass 1 – identifying object and generating search terms…")
-            identification, auto_keywords = self._pass1_identify(image_path, context=context)
+        if callable(self.on_pull_progress):
+            self.on_pull_progress(
+                f"Pass 1 – identifying object with '{self.model}' and generating search terms…"
+            )
+        identification, auto_keywords = self._pass1_identify(image_path, context=context)
 
+        if not reference_prices.strip():
             # Merge Pass-1 keywords + user-supplied extra keywords
             all_keywords_parts = [p.strip() for p in [auto_keywords, extra_keywords] if p.strip()]
             search_query = ", ".join(all_keywords_parts)
@@ -319,40 +346,28 @@ class AntiqueAnalyzer:
 
         # ── Pass 2: full deep-thinking appraisal with scraped prices ─────────
         if callable(self.on_pull_progress):
-            self.on_pull_progress("Pass 2 – deep-thinking appraisal with market data…")
-
-        # Enrich context with the Pass-1 identification so Pass 2 can build on it
-        enriched_context = context.strip()
-        if identification:
-            sep = "\n\n" if enriched_context else ""
-            enriched_context = (
-                f"[Initial identification from visual analysis]\n{identification}"
-                f"{sep}{enriched_context}"
+            self.on_pull_progress(
+                f"Pass 2 – appraising with '{self.reasoning_model}' using market data…"
             )
 
-        image_data = self._encode_image(image_path)
         template = _USER_TEMPLATE_DEEP if self.deep_thinking else _USER_TEMPLATE_STANDARD
         prompt = template.format(
-            context=enriched_context or "No additional context provided.",
+            identification=identification or "No initial visual analysis available.",
+            context=context.strip() or "No additional context provided.",
             reference_prices=reference_prices.strip() or "No reference prices available.",
         )
         logger.debug("Pass-2 request to model '%s' (deep_thinking=%s)",
-                     self.model, self.deep_thinking)
-        try:
-            response = ollama.chat(
-                model=self.model,
-                messages=[
-                    {"role": "system", "content": _SYSTEM_PROMPT},
-                    {
-                        "role": "user",
-                        "content": prompt,
-                        "images": [image_data],
-                    },
-                ],
-            )
-        except Exception as exc:
-            self._raise_if_not_vision(exc)
-            raise
+                     self.reasoning_model, self.deep_thinking)
+        response = ollama.chat(
+            model=self.reasoning_model,
+            messages=[
+                {"role": "system", "content": _SYSTEM_PROMPT},
+                {
+                    "role": "user",
+                    "content": prompt,
+                },
+            ],
+        )
         return response["message"]["content"]
 
     @staticmethod
@@ -369,8 +384,8 @@ class AntiqueAnalyzer:
                 f"Original error: {exc}"
             ) from exc
 
-    def _ensure_model(self, ollama) -> None:
-        """Pull *self.model* if it is not already available locally.
+    def _ensure_model(self, ollama, model_name: str) -> None:
+        """Pull *model_name* if it is not already available locally.
 
         Raises
         ------
@@ -399,16 +414,16 @@ class AntiqueAnalyzer:
         def _base(name: str) -> str:
             return (name or "").split(":")[0].lower()
 
-        if any(_base(n) == _base(self.model) for n in local_names):
+        if any(_base(n) == _base(model_name) for n in local_names):
             return  # model already present
 
-        logger.info("Model '%s' not found locally – pulling from Ollama…", self.model)
-        msg = f"Downloading model '{self.model}' – this may take a few minutes…"
+        logger.info("Model '%s' not found locally – pulling from Ollama…", model_name)
+        msg = f"Downloading model '{model_name}' – this may take a few minutes…"
         print(msg)
         if callable(self.on_pull_progress):
             self.on_pull_progress(msg)
         try:
-            for progress in ollama.pull(self.model, stream=True):
+            for progress in ollama.pull(model_name, stream=True):
                 # progress may be a ProgressResponse object or a plain dict
                 if hasattr(progress, "status"):
                     status = progress.status or ""
@@ -419,11 +434,11 @@ class AntiqueAnalyzer:
                     if callable(self.on_pull_progress):
                         self.on_pull_progress(status)
             print()  # newline after progress
-            logger.info("Model '%s' pulled successfully.", self.model)
+            logger.info("Model '%s' pulled successfully.", model_name)
         except Exception as exc:
             raise RuntimeError(
-                f"Failed to download model '{self.model}': {exc}\n"
-                "Run `ollama pull " + self.model + "` manually to install it."
+                f"Failed to download model '{model_name}': {exc}\n"
+                "Run `ollama pull " + model_name + "` manually to install it."
             ) from exc
 
     def list_available_models(self) -> list[str]:
