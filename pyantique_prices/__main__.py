@@ -28,8 +28,20 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument(
         "--model",
-        default="llava",
-        help="Ollama model to use (default: llava).",
+        default="llama3.2-vision",
+        help="Ollama model to use (default: llama3.2-vision).",
+    )
+    parser.add_argument(
+        "--deep-thinking",
+        action="store_true",
+        default=True,
+        help="Enable chain-of-thought reasoning prompt (default: on).",
+    )
+    parser.add_argument(
+        "--no-deep-thinking",
+        dest="deep_thinking",
+        action="store_false",
+        help="Disable chain-of-thought reasoning (faster, less accurate).",
     )
     args = parser.parse_args(argv)
 
@@ -43,7 +55,7 @@ def _run_cli(args) -> int:
     from pathlib import Path
 
     from .analyzer import AntiqueAnalyzer
-    from .scraper import TodoColeccionScraper
+    from .scraper import MultiSourceScraper
 
     target = Path(args.cli)
     try:
@@ -56,7 +68,7 @@ def _run_cli(args) -> int:
         print("No image files found.", file=sys.stderr)
         return 1
 
-    scraper = TodoColeccionScraper()
+    scraper = MultiSourceScraper()
     reference_prices = ""
     if args.keywords:
         print(f"Fetching reference prices for: {args.keywords}")
@@ -65,14 +77,15 @@ def _run_cli(args) -> int:
         except Exception as exc:  # noqa: BLE001
             print(f"Warning: could not fetch reference prices: {exc}", file=sys.stderr)
 
-    analyzer = AntiqueAnalyzer(model=args.model)
+    analyzer = AntiqueAnalyzer(model=args.model, deep_thinking=args.deep_thinking)
+    mode = "deep thinking" if args.deep_thinking else "standard"
     total = len(images)
 
     for idx, img_path in enumerate(images, 1):
         print(f"\n{'='*60}")
         print(f"Image {idx}/{total}: {img_path}")
         print(f"{'='*60}")
-        print(f"Analysing with model '{args.model}'…")
+        print(f"Analysing with model '{args.model}' [{mode}]…")
         try:
             result = analyzer.analyse(
                 img_path, context=args.context, reference_prices=reference_prices

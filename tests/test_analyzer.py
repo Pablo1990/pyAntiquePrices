@@ -115,7 +115,7 @@ class TestParsePriceRange:
 
 
 class TestAnalyse:
-    def _make_mock_ollama(self, content="This is a fine 19th century vase worth €400-€600.", model="llava"):
+    def _make_mock_ollama(self, content="This is a fine 19th century vase worth €400-€600.", model="llama3.2-vision"):
         mock_ollama = MagicMock()
         mock_ollama.chat.return_value = {"message": {"content": content}}
         # Simulate model already present locally
@@ -126,7 +126,7 @@ class TestAnalyse:
         mock_ollama = self._make_mock_ollama()
 
         with patch.dict(sys.modules, {"ollama": mock_ollama}):
-            analyzer = AntiqueAnalyzer(model="llava")
+            analyzer = AntiqueAnalyzer(model="llama3.2-vision")
             result = analyzer.analyse(DUMMY_IMAGE, context="Blue vase")
 
         mock_ollama.chat.assert_called_once()
@@ -149,6 +149,30 @@ class TestAnalyse:
         assert "grandmother" in user_message["content"]
         assert "300-500" in user_message["content"]
 
+    def test_deep_thinking_prompt_includes_thinking_section(self):
+        mock_ollama = self._make_mock_ollama(content="deep result")
+
+        with patch.dict(sys.modules, {"ollama": mock_ollama}):
+            analyzer = AntiqueAnalyzer(deep_thinking=True)
+            analyzer.analyse(DUMMY_IMAGE)
+
+        call_args = mock_ollama.chat.call_args
+        messages = call_args.kwargs.get("messages") or call_args.kwargs["messages"]
+        user_message = next(m for m in messages if m["role"] == "user")
+        assert "<thinking>" in user_message["content"]
+
+    def test_standard_prompt_no_thinking_section(self):
+        mock_ollama = self._make_mock_ollama(content="standard result")
+
+        with patch.dict(sys.modules, {"ollama": mock_ollama}):
+            analyzer = AntiqueAnalyzer(deep_thinking=False)
+            analyzer.analyse(DUMMY_IMAGE)
+
+        call_args = mock_ollama.chat.call_args
+        messages = call_args.kwargs.get("messages") or call_args.kwargs["messages"]
+        user_message = next(m for m in messages if m["role"] == "user")
+        assert "<thinking>" not in user_message["content"]
+
     def test_auto_pulls_missing_model(self):
         mock_ollama = MagicMock()
         mock_ollama.chat.return_value = {"message": {"content": "appraisal"}}
@@ -157,17 +181,17 @@ class TestAnalyse:
         mock_ollama.pull.return_value = iter([{"status": "pulling"}, {"status": "success"}])
 
         with patch.dict(sys.modules, {"ollama": mock_ollama}):
-            analyzer = AntiqueAnalyzer(model="llava")
+            analyzer = AntiqueAnalyzer(model="llama3.2-vision")
             analyzer.analyse(DUMMY_IMAGE)
 
-        mock_ollama.pull.assert_called_once_with("llava", stream=True)
+        mock_ollama.pull.assert_called_once_with("llama3.2-vision", stream=True)
         mock_ollama.chat.assert_called_once()
 
     def test_skips_pull_when_model_present(self):
         mock_ollama = self._make_mock_ollama()
 
         with patch.dict(sys.modules, {"ollama": mock_ollama}):
-            analyzer = AntiqueAnalyzer(model="llava")
+            analyzer = AntiqueAnalyzer(model="llama3.2-vision")
             analyzer.analyse(DUMMY_IMAGE)
 
         mock_ollama.pull.assert_not_called()
