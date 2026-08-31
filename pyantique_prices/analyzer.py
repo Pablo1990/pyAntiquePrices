@@ -23,6 +23,9 @@ RECOMMENDED_MODELS = [
 ]
 
 _DEFAULT_MODEL = "minicpm-v"
+_DEFAULT_REASONING_BACKEND = "ollama"
+_REASONING_BACKENDS = {"ollama", "huggingface"}
+_DEFAULT_MAX_NEW_TOKENS = 768
 
 # -------------------------------------------------------------------------
 # Prompts
@@ -43,10 +46,11 @@ not "a bowl".
 
 PART B – Search keywords (one line, comma-separated, no explanation):
 List 6-8 auction-specialist search keywords that would find the most \
-comparable sold items on platforms such as Catawiki, LiveAuctioneers or \
-Invaluable. Derive these from your identification above PLUS the owner's \
-context. Include: object type, cultural origin, period/style, main material, \
-distinctive feature, and (if relevant) any maker or school.
+comparable sold items on Spanish and European auction platforms such as \
+Todocoleccion, Setdart, Catawiki, LiveAuctioneers or Invaluable. Derive these \
+from your identification above PLUS the owner's context. Include: object type, \
+cultural origin, period/style, main material, distinctive feature, and (if \
+relevant) any maker or school.
 Example: Chinese blue and white porcelain bowl, Kangxi period, export ware, \
 floral medallion, 18th century, Qing dynasty"""
 
@@ -63,12 +67,19 @@ When you examine an image you follow a rigorous methodology:
   • Compare with known reference pieces and market sales data you have memorised.
   • Apply current market conditions: collector demand, rarity, provenance weight.
 
-You ALWAYS reason step-by-step before giving a final answer, explicitly showing \
-your chain of thought so that the reasoning can be verified. \
-Your final appraisal is structured, specific and justified by visible evidence."""
+When estimating value you prioritise the current Spanish market first, then \
+broader European comparables, and always quote prices in EUR.
+
+Your final appraisal is structured, specific and justified by the supplied \
+visual evidence and comparable-market data."""
 
 _USER_TEMPLATE_STANDARD = """\
-Please examine the antique item in this image and provide a detailed appraisal.
+Use the visual analysis from Pass 1 together with the owner's context and the \
+market comparables below to provide a detailed appraisal focused on the Spanish \
+market.
+
+Initial visual analysis from the vision model:
+{identification}
 
 Additional context provided by the owner:
 {context}
@@ -84,24 +95,30 @@ visual clues that led you to this conclusion.
 3. **Condition Assessment**: Visible condition issues (chips, cracks, fading, \
 restorations, missing parts); overall grade (Excellent / Good / Fair / Poor).
 4. **Estimated Price Range**: Realistic EUR market range, separately for:
-   - Auction estimate (hammer price at a major house)
-   - Retail / dealer price
+   - Auction estimate (hammer price in the Spanish market where possible)
+   - Retail / dealer price in Spain
    Justify the range with reference to the condition and comparable sales.
 5. **Key Value Factors**: Top 3-5 factors that raise or lower the value of \
 this specific piece.
 6. **Confidence Level**: Low / Medium / High – explain what additional \
 information would increase your confidence.
 
-Be specific and cite observable evidence from the image for every claim."""
+Be specific and cite the Pass-1 visual evidence and the comparable market data \
+for every claim."""
 
 _USER_TEMPLATE_DEEP = """\
-Please examine the antique item in this image. \
-Before giving your final structured appraisal, work through the following \
-reasoning steps explicitly (this "thinking" section will be shown to the user):
+Use the visual analysis from Pass 1 together with the owner's context and the \
+market comparables below. Before giving your final structured appraisal, work \
+through the following reasoning steps explicitly (this "thinking" section will \
+be shown to the user):
+
+Initial visual analysis from the vision model:
+{identification}
 
 <thinking>
 Step 1 – Object identification:
-  What is the most likely object type? List alternatives and rule them out.
+  Based on the visual analysis, what is the most likely object type? List \
+alternatives and rule them out.
 
 Step 2 – Style and period analysis:
   What stylistic features narrow the period? Consider form, decoration, \
@@ -122,7 +139,8 @@ condition? Are the prices consistent with your initial assessment? \
 Revise your estimate if the data suggests a different range.
 
 Step 6 – Synthesis:
-  Combine all the above into a probability-weighted estimate of age and value.
+  Combine all the above into a probability-weighted estimate of age and value, \
+with the Spanish market as the primary benchmark.
 </thinking>
 
 After the thinking section, provide your final appraisal:
@@ -139,22 +157,33 @@ Reference data found online for similar items:
 2. **Estimated Age**: Most likely decade or period, justified by visual evidence.
 3. **Condition Assessment**: Visible issues; overall grade (Excellent/Good/Fair/Poor).
 4. **Estimated Price Range**:
-   - Auction estimate: …
-   - Retail / dealer price: …
+   - Auction estimate in Spain: …
+   - Retail / dealer price in Spain: …
 5. **Key Value Factors**: Top 3-5 factors raising or lowering value.
 6. **Confidence Level**: Low / Medium / High – what would raise it?"""
 
 
 class AntiqueAnalyzer:
-    """Analyse antique images with a local Ollama vision model.
+    """Analyse antique images with a local Ollama vision model and optional
+    Ollama or Hugging Face reasoning backend.
 
     Parameters
     ----------
     model:
-        The Ollama model to use (default: ``minicpm-v``).  Any multimodal
-        model available in your local Ollama installation can be used.
+        The Pass-1 Ollama vision model to use (default: ``minicpm-v``).  Any
+        multimodal model available in your local Ollama installation can be used.
         See ``RECOMMENDED_MODELS`` for a list of models known to work with
         Ollama ≥ 0.30.
+    reasoning_model:
+        Optional Pass-2 Ollama reasoning model.  Defaults to the same value as
+        *model*.  This can be another vision model or a text-only model because
+        Pass 2 operates on the Pass-1 visual summary plus scraped comparables.
+    reasoning_backend:
+        Pass-2 backend. ``"ollama"`` uses Ollama chat, while ``"huggingface"``
+        loads a local Transformers causal LM for price estimation.
+    reasoning_adapter:
+        Optional Hugging Face PEFT adapter identifier for Pass 2. When supplied,
+        the reasoning backend automatically switches to ``"huggingface"``.
     deep_thinking:
         When ``True`` the prompt explicitly asks the model to show its
         chain-of-thought before the final answer.
@@ -163,11 +192,26 @@ class AntiqueAnalyzer:
     def __init__(
         self,
         model: str = _DEFAULT_MODEL,
+        reasoning_model: str | None = None,
+        reasoning_backend: str = _DEFAULT_REASONING_BACKEND,
+        reasoning_adapter: str | None = None,
         deep_thinking: bool = True,
     ) -> None:
+        if reasoning_adapter and reasoning_backend == _DEFAULT_REASONING_BACKEND:
+            reasoning_backend = "huggingface"
+        if reasoning_backend not in _REASONING_BACKENDS:
+            raise ValueError(
+                f"Unsupported reasoning backend '{reasoning_backend}'. "
+                f"Choose one of: {', '.join(sorted(_REASONING_BACKENDS))}."
+            )
         self.model = model
+        self.reasoning_model = reasoning_model or model
+        self.reasoning_backend = reasoning_backend
+        self.reasoning_adapter = reasoning_adapter
         self.deep_thinking = deep_thinking
         self.on_pull_progress = None  # optional callable(status: str)
+        self._hf_reasoner_cache_key: Optional[tuple[str, Optional[str]]] = None
+        self._hf_reasoner = None
 
     # ------------------------------------------------------------------
     # Public API
@@ -229,6 +273,10 @@ class AntiqueAnalyzer:
             logger.debug("Pass-1 keywords: %s", keywords)
             return identification, keywords
         except Exception as exc:  # noqa: BLE001
+            try:
+                self._raise_if_not_vision(exc)
+            except ValueError:
+                raise
             logger.warning("Pass-1 identification failed: %s", exc)
             return "", ""
 
@@ -260,13 +308,13 @@ class AntiqueAnalyzer:
         *extra_keywords*) are used to fetch comparable prices from auction
         sites via DuckDuckGo.
 
-        **Pass 2** (deep): the model re-examines the image with the scraped
-        prices injected into the prompt.  It explicitly compares its initial
+        **Pass 2** (deep): the reasoning model uses the Pass-1 identification
+        plus the scraped prices.  It explicitly compares the initial
         identification against the market data and revises if needed, then
         produces the final structured appraisal.
 
-        Passing a pre-fetched *reference_prices* string bypasses Passes 1 and
-        the scraping step, going straight to Pass 2.
+        Passing a pre-fetched *reference_prices* string bypasses the scraping
+        step, but Pass 1 still runs so Pass 2 receives a visual identification.
 
         Parameters
         ----------
@@ -287,20 +335,22 @@ class AntiqueAnalyzer:
         Returns
         -------
         str
-            The model's appraisal text, prefixed with the Pass-1
-            identification block.
+            The reasoning model's appraisal text.
         """
         import ollama  # imported lazily so the package loads without ollama running
 
-        self._ensure_model(ollama)
+        self._ensure_model(ollama, self.model)
+        if self.reasoning_backend == "ollama" and self.reasoning_model != self.model:
+            self._ensure_model(ollama, self.reasoning_model)
 
         # ── Pass 1: identify + generate search keywords ──────────────────────
-        identification = ""
-        if not reference_prices.strip():
-            if callable(self.on_pull_progress):
-                self.on_pull_progress("Pass 1 – identifying object and generating search terms…")
-            identification, auto_keywords = self._pass1_identify(image_path, context=context)
+        if callable(self.on_pull_progress):
+            self.on_pull_progress(
+                f"Pass 1 – identifying object with '{self.model}' and generating search terms…"
+            )
+        identification, auto_keywords = self._pass1_identify(image_path, context=context)
 
+        if not reference_prices.strip():
             # Merge Pass-1 keywords + user-supplied extra keywords
             all_keywords_parts = [p.strip() for p in [auto_keywords, extra_keywords] if p.strip()]
             search_query = ", ".join(all_keywords_parts)
@@ -319,41 +369,29 @@ class AntiqueAnalyzer:
 
         # ── Pass 2: full deep-thinking appraisal with scraped prices ─────────
         if callable(self.on_pull_progress):
-            self.on_pull_progress("Pass 2 – deep-thinking appraisal with market data…")
+            if self.reasoning_backend == "ollama":
+                self.on_pull_progress(
+                    f"Pass 2 – appraising with Ollama model '{self.reasoning_model}' using market data…"
+                )
+            else:
+                adapter_suffix = f" + adapter '{self.reasoning_adapter}'" if self.reasoning_adapter else ""
+                self.on_pull_progress(
+                    f"Pass 2 – appraising with Hugging Face model '{self.reasoning_model}'{adapter_suffix}…"
+                )
 
-        # Enrich context with the Pass-1 identification so Pass 2 can build on it
-        enriched_context = context.strip()
-        if identification:
-            sep = "\n\n" if enriched_context else ""
-            enriched_context = (
-                f"[Initial identification from visual analysis]\n{identification}"
-                f"{sep}{enriched_context}"
-            )
-
-        image_data = self._encode_image(image_path)
         template = _USER_TEMPLATE_DEEP if self.deep_thinking else _USER_TEMPLATE_STANDARD
         prompt = template.format(
-            context=enriched_context or "No additional context provided.",
+            identification=identification or "No initial visual analysis available.",
+            context=context.strip() or "No additional context provided.",
             reference_prices=reference_prices.strip() or "No reference prices available.",
         )
-        logger.debug("Pass-2 request to model '%s' (deep_thinking=%s)",
-                     self.model, self.deep_thinking)
-        try:
-            response = ollama.chat(
-                model=self.model,
-                messages=[
-                    {"role": "system", "content": _SYSTEM_PROMPT},
-                    {
-                        "role": "user",
-                        "content": prompt,
-                        "images": [image_data],
-                    },
-                ],
-            )
-        except Exception as exc:
-            self._raise_if_not_vision(exc)
-            raise
-        return response["message"]["content"]
+        logger.debug(
+            "Pass-2 request to model '%s' via backend '%s' (deep_thinking=%s)",
+            self.reasoning_model,
+            self.reasoning_backend,
+            self.deep_thinking,
+        )
+        return self._run_reasoning_pass(prompt)
 
     @staticmethod
     def _raise_if_not_vision(exc: Exception) -> None:
@@ -369,8 +407,119 @@ class AntiqueAnalyzer:
                 f"Original error: {exc}"
             ) from exc
 
-    def _ensure_model(self, ollama) -> None:
-        """Pull *self.model* if it is not already available locally.
+    def _run_reasoning_pass(self, prompt: str) -> str:
+        if self.reasoning_backend == "ollama":
+            import ollama  # noqa: PLC0415
+
+            response = ollama.chat(
+                model=self.reasoning_model,
+                messages=[
+                    {"role": "system", "content": _SYSTEM_PROMPT},
+                    {
+                        "role": "user",
+                        "content": prompt,
+                    },
+                ],
+            )
+            return response["message"]["content"]
+
+        if self.reasoning_backend == "huggingface":
+            return self._run_huggingface_reasoning_pass(prompt)
+
+        raise ValueError(
+            f"Unsupported reasoning backend '{self.reasoning_backend}'. "
+            f"Choose one of: {', '.join(sorted(_REASONING_BACKENDS))}."
+        )
+
+    def _run_huggingface_reasoning_pass(self, prompt: str) -> str:
+        tokenizer, model, torch = self._load_huggingface_reasoner()
+        input_text = self._format_huggingface_prompt(tokenizer, prompt)
+        inputs = tokenizer(input_text, return_tensors="pt")
+        model_device = getattr(model, "device", None)
+        if model_device is not None:
+            inputs = {
+                key: value.to(model_device) if hasattr(value, "to") else value
+                for key, value in inputs.items()
+            }
+
+        prompt_length = inputs["input_ids"].shape[-1]
+        pad_token_id = getattr(tokenizer, "pad_token_id", None) or getattr(tokenizer, "eos_token_id", None)
+
+        with torch.inference_mode():
+            outputs = model.generate(
+                **inputs,
+                max_new_tokens=_DEFAULT_MAX_NEW_TOKENS,
+                do_sample=False,
+                pad_token_id=pad_token_id,
+            )
+
+        generated_tokens = outputs[0][prompt_length:]
+        text = tokenizer.decode(generated_tokens, skip_special_tokens=True).strip()
+        if not text:
+            text = tokenizer.decode(outputs[0], skip_special_tokens=True).strip()
+        return text
+
+    def _load_huggingface_reasoner(self):
+        cache_key = (self.reasoning_model, self.reasoning_adapter)
+        if self._hf_reasoner_cache_key == cache_key and self._hf_reasoner is not None:
+            return self._hf_reasoner
+
+        try:
+            import torch  # noqa: PLC0415
+            from transformers import AutoModelForCausalLM, AutoTokenizer  # noqa: PLC0415
+        except ImportError as exc:  # pragma: no cover - exercised via tests with patched helper
+            raise RuntimeError(
+                "Hugging Face reasoning requires optional dependencies. "
+                "Install them with `python -m pip install -e '.[hf]'`."
+            ) from exc
+
+        logger.info("Loading Hugging Face reasoning model '%s'", self.reasoning_model)
+        tokenizer = AutoTokenizer.from_pretrained(self.reasoning_model)
+        if getattr(tokenizer, "pad_token_id", None) is None and getattr(tokenizer, "eos_token", None):
+            tokenizer.pad_token = tokenizer.eos_token
+
+        model = AutoModelForCausalLM.from_pretrained(
+            self.reasoning_model,
+            torch_dtype="auto",
+        )
+        if self.reasoning_adapter:
+            try:
+                from peft import PeftModel  # noqa: PLC0415
+            except ImportError as exc:  # pragma: no cover - exercised via tests with patched helper
+                raise RuntimeError(
+                    "PEFT adapters require the optional `peft` dependency. "
+                    "Install it with `python -m pip install -e '.[hf]'`."
+                ) from exc
+            logger.info("Loading PEFT adapter '%s'", self.reasoning_adapter)
+            model = PeftModel.from_pretrained(model, self.reasoning_adapter)
+
+        device = "cuda" if torch.cuda.is_available() else "cpu"
+        if hasattr(model, "to"):
+            model = model.to(device)
+        if hasattr(model, "eval"):
+            model.eval()
+
+        self._hf_reasoner = (tokenizer, model, torch)
+        self._hf_reasoner_cache_key = cache_key
+        return self._hf_reasoner
+
+    @staticmethod
+    def _format_huggingface_prompt(tokenizer, prompt: str) -> str:
+        messages = [
+            {"role": "system", "content": _SYSTEM_PROMPT},
+            {"role": "user", "content": prompt},
+        ]
+        chat_template = getattr(tokenizer, "apply_chat_template", None)
+        if callable(chat_template):
+            try:
+                return chat_template(messages, tokenize=False, add_generation_prompt=True)
+            except Exception:  # noqa: BLE001
+                logger.debug("Tokenizer chat template unavailable; falling back to plain prompt.")
+
+        return f"{_SYSTEM_PROMPT}\n\nUser:\n{prompt}\n\nAssistant:\n"
+
+    def _ensure_model(self, ollama, model_name: str) -> None:
+        """Pull *model_name* if it is not already available locally.
 
         Raises
         ------
@@ -399,16 +548,16 @@ class AntiqueAnalyzer:
         def _base(name: str) -> str:
             return (name or "").split(":")[0].lower()
 
-        if any(_base(n) == _base(self.model) for n in local_names):
+        if any(_base(n) == _base(model_name) for n in local_names):
             return  # model already present
 
-        logger.info("Model '%s' not found locally – pulling from Ollama…", self.model)
-        msg = f"Downloading model '{self.model}' – this may take a few minutes…"
+        logger.info("Model '%s' not found locally – pulling from Ollama…", model_name)
+        msg = f"Downloading model '{model_name}' – this may take a few minutes…"
         print(msg)
         if callable(self.on_pull_progress):
             self.on_pull_progress(msg)
         try:
-            for progress in ollama.pull(self.model, stream=True):
+            for progress in ollama.pull(model_name, stream=True):
                 # progress may be a ProgressResponse object or a plain dict
                 if hasattr(progress, "status"):
                     status = progress.status or ""
@@ -419,11 +568,11 @@ class AntiqueAnalyzer:
                     if callable(self.on_pull_progress):
                         self.on_pull_progress(status)
             print()  # newline after progress
-            logger.info("Model '%s' pulled successfully.", self.model)
+            logger.info("Model '%s' pulled successfully.", model_name)
         except Exception as exc:
             raise RuntimeError(
-                f"Failed to download model '{self.model}': {exc}\n"
-                "Run `ollama pull " + self.model + "` manually to install it."
+                f"Failed to download model '{model_name}': {exc}\n"
+                "Run `ollama pull " + model_name + "` manually to install it."
             ) from exc
 
     def list_available_models(self) -> list[str]:

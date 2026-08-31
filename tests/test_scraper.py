@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from unittest.mock import MagicMock
+from urllib.parse import parse_qs, unquote_plus, urlparse
 
 import pytest
 
@@ -59,6 +60,22 @@ class TestDuckDuckGoParseResults:
         result = scraper.get_reference_prices("pocket watch")
         scraper._fetch.assert_called_once()
         assert result == ""
+
+    def test_search_query_prioritises_spanish_marketplaces(self):
+        scraper = DuckDuckGoScraper()
+        mock_rp = MagicMock()
+        mock_rp.can_fetch.return_value = True
+        scraper._robots = mock_rp
+        scraper._fetch = MagicMock(return_value="<html></html>")
+
+        scraper.get_reference_prices("pocket watch")
+
+        fetch_url = scraper._fetch.call_args.args[0]
+        encoded_query = parse_qs(urlparse(fetch_url).query)["q"][0]
+        decoded_query = unquote_plus(encoded_query)
+        assert "site:todocoleccion.net" in decoded_query
+        assert "site:setdart.com" in decoded_query
+        assert "spain" in decoded_query
 
 
 class TestMultiSourceScraper:

@@ -1,7 +1,7 @@
 # pyAntiquePrices
 
-> **Local-first antique appraisal powered by a vision LLM.**  
-> Point it at an image (or a whole folder), pick a model, and get an expert-quality appraisal with estimated age, condition, and price range — all running on your own machine.
+> **Local-first antique appraisal powered by a vision model plus a reasoning model.**  
+> Point it at an image (or a whole folder), pick the models, and get an expert-quality appraisal with estimated age, condition, and price range — all running on your own machine.
 
 ---
 
@@ -37,13 +37,13 @@ Pass 1 – Identification (fast)
     ▼
 Automatic price scraping
     └─ Keywords (Pass-1 + any user extras) → DuckDuckGo
-           → Catawiki / LiveAuctioneers / Invaluable
+           → Todocoleccion / Setdart / Catawiki / LiveAuctioneers / Invaluable
     │
     ▼
 Pass 2 – Deep-thinking appraisal
-    └─ LLM re-examines image with:
+    └─ Reasoning model builds on:
          • Owner context
-         • Pass-1 identification (to build on, not repeat)
+        • Pass-1 visual identification (to build on, not repeat)
          • Scraped comparable prices
        Explicitly compares the item against real sold prices and revises
        its estimate if the market data suggests a different range.
@@ -71,6 +71,7 @@ Scraping is fully automatic — you don't need to supply any keywords unless you
 | **Python ≥ 3.9** | |
 | **[Ollama](https://ollama.com/)** | Must be installed and running. Download from [ollama.com](https://ollama.com/download). |
 | **A vision-capable model** | Auto-downloaded on first use, or run `ollama pull minicpm-v` in advance. |
+| **Optional: Hugging Face reasoning stack** | Needed only if you want Pass 2 price estimation via `transformers` + `peft` instead of Ollama. |
 | `ollama` Python SDK | Installed automatically via `pip`. |
 | `requests`, `beautifulsoup4` | Web scraper (installed automatically). |
 | `Pillow` | Image utilities (installed automatically). |
@@ -88,12 +89,15 @@ cd pyAntiquePrices
 # 2. Install the package (editable mode recommended for development)
 pip install -e .
 
+# Optional: enable Hugging Face + PEFT for Pass 2 reasoning
+pip install -e ".[hf]"
+
 # 3. Start Ollama (if not already running)
 ollama serve          # macOS/Linux background daemon
 # On Windows: Ollama runs as a system tray application after installation
 ```
 
-The first time you analyse an image, the selected model will be automatically downloaded if it is not already present. To pre-download the default model:
+The first time you analyse an image, any selected model that is not already available locally will be automatically downloaded. To pre-download the default vision model:
 
 ```bash
 ollama pull minicpm-v
@@ -115,10 +119,12 @@ The graphical interface opens immediately.
    Click **Image…** to pick a single photo, or **Folder…** to select a directory.  
    Supported formats: JPEG, PNG, WEBP, BMP, TIFF, GIF.
 
-2. **Choose a model**  
-   The dropdown is pre-populated with recommended vision models.  
-   You can also type any Ollama model name directly.  
-   If you enter a model that is not in the recommended list, a warning dialog will ask you to confirm — text-only models will fail because they cannot process images.
+2. **Choose the two models**  
+   **Vision model (Pass 1)** is pre-populated with recommended vision models and must support images.  
+   **Reasoning backend (Pass 2)** can be either **Ollama** or **Hugging Face**.  
+   **Reasoning model (Pass 2)** can be the same Ollama model, a text-focused Ollama model, or a Hugging Face base-model repo id.  
+   If you use Hugging Face, you can also provide an optional PEFT adapter such as `jordanmatsumoto/pricing-specialist`.  
+   If you enter a Pass-1 model that is not in the recommended list, a warning dialog will ask you to confirm.
 
 3. **Enable Deep thinking** *(recommended)*  
    When checked, the model explicitly reasons step-by-step before producing its final answer. This takes longer but is significantly more accurate, especially for ambiguous items.
@@ -137,7 +143,7 @@ The graphical interface opens immediately.
 ## Quick start – CLI
 
 ```bash
-# Single image, default model (minicpm-v), deep thinking on
+# Single image, default models (minicpm-v for both passes), deep thinking on
 pyantique-prices --cli path/to/photo.jpg
 
 # With search keywords and additional context
@@ -145,8 +151,18 @@ pyantique-prices --cli photo.jpg \
     --keywords "bronze Buddha Meiji period" \
     --context "Found in a Japanese estate, base has red lacquer seal"
 
-# Specify a different model
+# Specify a different vision model
 pyantique-prices --cli photo.jpg --model llava:13b
+
+# Use separate models for vision and valuation
+pyantique-prices --cli photo.jpg --model minicpm-v --reasoning-model qwen3:8b
+
+# Use a Hugging Face PEFT model for Pass 2 price estimation
+pyantique-prices --cli photo.jpg \
+    --model minicpm-v \
+    --reasoning-backend huggingface \
+    --reasoning-model meta-llama/Meta-Llama-3.1-8B \
+    --reasoning-adapter jordanmatsumoto/pricing-specialist
 
 # Disable deep thinking for a faster pass
 pyantique-prices --cli photo.jpg --no-deep-thinking
@@ -166,7 +182,10 @@ pyantique-prices --cli /path/to/antiques/ \
 | Option | Default | Description |
 |---|---|---|
 | `--cli IMAGE_OR_FOLDER` | — | Path to an image file or a directory of images. |
-| `--model MODEL` | `minicpm-v` | Ollama model name. Must support vision. |
+| `--model MODEL` | `minicpm-v` | Pass-1 vision model. Must support vision. |
+| `--reasoning-model MODEL` | same as `--model` | Pass-2 reasoning model. Use an Ollama name or a Hugging Face base-model repo id. |
+| `--reasoning-backend BACKEND` | `ollama` | Pass-2 backend: `ollama` or `huggingface`. |
+| `--reasoning-adapter ADAPTER` | *(empty)* | Optional Hugging Face PEFT adapter for Pass 2. |
 | `--keywords KEYWORDS` | *(empty)* | Extra search keywords merged with auto-generated ones. |
 | `--context CONTEXT` | *(empty)* | Free-text context about the item(s). |
 | `--deep-thinking` | on | Enable chain-of-thought reasoning (default). |
@@ -187,7 +206,10 @@ prices = scraper.get_reference_prices("Chinese blue and white porcelain vase 18t
 
 # 2. Analyse the image
 analyzer = AntiqueAnalyzer(
-    model="minicpm-v",     # any Ollama vision model
+    model="minicpm-v",     # Pass 1 vision model
+    reasoning_model="meta-llama/Meta-Llama-3.1-8B",  # Pass 2 base model
+    reasoning_backend="huggingface",
+    reasoning_adapter="jordanmatsumoto/pricing-specialist",
     deep_thinking=True,    # chain-of-thought reasoning
 )
 appraisal = analyzer.analyse(
@@ -221,7 +243,7 @@ for img in images:
 
 ## Recommended models
 
-These models are confirmed to work with **Ollama ≥ 0.30**.
+These vision models are confirmed to work with **Ollama ≥ 0.30**.
 
 | Model | RAM / VRAM | Notes |
 |---|---|---|
@@ -239,6 +261,15 @@ ollama pull minicpm-v
 ollama pull llava:13b
 ```
 
+For **Pass 2 reasoning**, you can keep the same model or choose a separate
+text-focused model if you prefer. Good starting points are `qwen3:8b`,
+`llama3.1:8b`, or another reasoning model already available in your local
+Ollama setup.
+
+If you prefer a fine-tuned Hugging Face reasoner, install the optional `hf`
+extra and set `reasoning_backend="huggingface"` with a base model plus an
+optional PEFT adapter.
+
 ---
 
 ## Model compatibility notes
@@ -247,9 +278,10 @@ ollama pull llava:13b
 > It uses the `mllama` architecture which was removed when Ollama replaced its backend.  
 > Use `minicpm-v` or any model from the table above instead.
 
-> ⚠️ **Text-only models** (e.g. `mistral`, `deepseek-r1`, `gemma`) will fail with:  
+> ⚠️ **Text-only models** (e.g. `mistral`, `deepseek-r1`, `gemma`) will fail in **Pass 1** with:  
 > `Multimodal data provided, but model does not support multimodal requests.`  
-> The app will show a clear error message listing the recommended vision models.
+> Use them only as the optional `--reasoning-model` / Pass-2 model.  
+> The app will show a clear error message listing the recommended vision models if you try to use one for image analysis.
 
 ---
 
@@ -259,15 +291,17 @@ Price scraping is **fully automatic** — no configuration required.
 
 For every image analysed, the app:
 
-1. Makes a quick LLM call to identify the object and produce 5-7 auction-specialist search keywords.
+1. Uses the Pass-1 vision model to identify the object and produce 5-7 auction-specialist search keywords.
 2. Merges those with any extra keywords you supplied.
-3. Queries **DuckDuckGo** (HTML endpoint, no API key required) scoped to major auction sites to find comparable listings:
+3. Queries **DuckDuckGo** (HTML endpoint, no API key required) scoped to Spanish-first and major auction sites to find comparable listings:
 
+- [Todocoleccion](https://www.todocoleccion.net)
+- [Setdart](https://www.setdart.com)
 - [Catawiki](https://www.catawiki.com)
 - [LiveAuctioneers](https://www.liveauctioneers.com)
 - [Invaluable](https://www.invaluable.com)
 
-The scraped snippets are injected into the LLM prompt so the model can anchor its price estimate to real comparable sales.
+The scraped snippets are injected into the Pass-2 reasoning prompt so the model can anchor its price estimate to real comparable sales, with the Spanish market treated as the primary benchmark.
 
 The scraper fully respects each site's `robots.txt` and uses a polite 3-second crawl delay between requests. If a site disallows scraping, that source is silently skipped and the appraisal continues without it.
 

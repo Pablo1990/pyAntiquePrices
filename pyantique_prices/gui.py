@@ -60,7 +60,7 @@ class App(tk.Tk):
         # Model row – combobox with recommended models + free-text
         model_row = ttk.Frame(top)
         model_row.pack(fill=tk.X, pady=(0, _PAD))
-        ttk.Label(model_row, text="Ollama model:").pack(side=tk.LEFT)
+        ttk.Label(model_row, text="Vision model (Pass 1):").pack(side=tk.LEFT)
         self._model_var = tk.StringVar(value=RECOMMENDED_MODELS[0])
         model_cb = ttk.Combobox(
             model_row,
@@ -71,7 +71,45 @@ class App(tk.Tk):
         model_cb.pack(side=tk.LEFT, padx=_PAD)
         ttk.Label(
             model_row,
-            text="(or type any Ollama model name)",
+            text="(must support vision)",
+            foreground="grey",
+        ).pack(side=tk.LEFT)
+
+        reasoner_row = ttk.Frame(top)
+        reasoner_row.pack(fill=tk.X, pady=(0, _PAD))
+        ttk.Label(reasoner_row, text="Reasoning backend (Pass 2):").pack(side=tk.LEFT)
+        self._reasoning_backend_var = tk.StringVar(value="ollama")
+        ttk.Combobox(
+            reasoner_row,
+            textvariable=self._reasoning_backend_var,
+            values=("ollama", "huggingface"),
+            width=14,
+            state="readonly",
+        ).pack(side=tk.LEFT, padx=_PAD)
+        ttk.Label(reasoner_row, text="Model:").pack(side=tk.LEFT)
+        self._reasoning_model_var = tk.StringVar(value=RECOMMENDED_MODELS[0])
+        ttk.Combobox(
+            reasoner_row,
+            textvariable=self._reasoning_model_var,
+            values=RECOMMENDED_MODELS,
+            width=28,
+        ).pack(side=tk.LEFT, padx=_PAD)
+        ttk.Label(
+            reasoner_row,
+            text="(Ollama name or Hugging Face base-model repo id)",
+            foreground="grey",
+        ).pack(side=tk.LEFT)
+
+        adapter_row = ttk.Frame(top)
+        adapter_row.pack(fill=tk.X, pady=(0, _PAD))
+        ttk.Label(adapter_row, text="PEFT adapter (optional):").pack(side=tk.LEFT)
+        self._reasoning_adapter_var = tk.StringVar()
+        ttk.Entry(adapter_row, textvariable=self._reasoning_adapter_var, width=48).pack(
+            side=tk.LEFT, padx=_PAD
+        )
+        ttk.Label(
+            adapter_row,
+            text="Use with Hugging Face, e.g. jordanmatsumoto/pricing-specialist",
             foreground="grey",
         ).pack(side=tk.LEFT)
 
@@ -165,6 +203,18 @@ class App(tk.Tk):
         if not model:
             messagebox.showwarning("No model", "Please enter an Ollama model name.")
             return
+        reasoning_model = self._reasoning_model_var.get().strip()
+        if not reasoning_model:
+            messagebox.showwarning("No reasoning model", "Please enter a Pass 2 reasoning model name.")
+            return
+        reasoning_backend = self._reasoning_backend_var.get().strip() or "ollama"
+        reasoning_adapter = self._reasoning_adapter_var.get().strip() or None
+        if (reasoning_backend == "huggingface" or reasoning_adapter) and not reasoning_model:
+            messagebox.showwarning(
+                "Missing reasoning model",
+                "Please enter a Hugging Face base model repo id for Pass 2.",
+            )
+            return
 
         # Warn if the selected model is not in the recommended vision list
         if model not in RECOMMENDED_MODELS:
@@ -202,7 +252,16 @@ class App(tk.Tk):
 
         thread = threading.Thread(
             target=self._run_analysis,
-            args=(images, model, context, keywords, deep_thinking),
+            args=(
+                images,
+                model,
+                reasoning_model,
+                reasoning_backend,
+                reasoning_adapter,
+                context,
+                keywords,
+                deep_thinking,
+            ),
             daemon=True,
         )
         thread.start()
@@ -211,12 +270,18 @@ class App(tk.Tk):
         self,
         images: list[Path],
         model: str,
+        reasoning_model: str,
+        reasoning_backend: str,
+        reasoning_adapter: str | None,
         context: str,
         keywords: str,
         deep_thinking: bool,
     ) -> None:
         """Background worker – must not touch Tk widgets directly."""
         self._analyzer.model = model
+        self._analyzer.reasoning_model = reasoning_model
+        self._analyzer.reasoning_backend = reasoning_backend
+        self._analyzer.reasoning_adapter = reasoning_adapter
         self._analyzer.deep_thinking = deep_thinking
         self._analyzer.on_pull_progress = self._on_pull_progress
 

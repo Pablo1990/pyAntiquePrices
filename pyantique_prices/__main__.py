@@ -29,7 +29,29 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--model",
         default="minicpm-v",
-        help="Ollama model to use (default: minicpm-v).",
+        help="Ollama vision model for Pass 1 image analysis (default: minicpm-v).",
+    )
+    parser.add_argument(
+        "--reasoning-model",
+        default=None,
+        help=(
+            "Pass-2 reasoning model. For Ollama, this is the Ollama model name. "
+            "For Hugging Face, this is the base model repo id."
+        ),
+    )
+    parser.add_argument(
+        "--reasoning-backend",
+        choices=("ollama", "huggingface"),
+        default="ollama",
+        help="Pass-2 backend for reasoning and price estimation (default: ollama).",
+    )
+    parser.add_argument(
+        "--reasoning-adapter",
+        default=None,
+        help=(
+            "Optional Hugging Face PEFT adapter repo id for Pass 2, "
+            "for example jordanmatsumoto/pricing-specialist."
+        ),
     )
     parser.add_argument(
         "--deep-thinking",
@@ -57,6 +79,14 @@ def _run_cli(args) -> int:
     from .analyzer import AntiqueAnalyzer
     from .scraper import MultiSourceScraper
 
+    if (args.reasoning_backend == "huggingface" or args.reasoning_adapter) and not args.reasoning_model:
+        print(
+            "Error: --reasoning-model is required when using --reasoning-backend huggingface "
+            "or --reasoning-adapter.",
+            file=sys.stderr,
+        )
+        return 1
+
     target = Path(args.cli)
     try:
         images = AntiqueAnalyzer.collect_images(target)
@@ -69,7 +99,13 @@ def _run_cli(args) -> int:
         return 1
 
     scraper = MultiSourceScraper()
-    analyzer = AntiqueAnalyzer(model=args.model, deep_thinking=args.deep_thinking)
+    analyzer = AntiqueAnalyzer(
+        model=args.model,
+        reasoning_model=args.reasoning_model,
+        reasoning_backend=args.reasoning_backend,
+        reasoning_adapter=args.reasoning_adapter,
+        deep_thinking=args.deep_thinking,
+    )
 
     def _on_progress(status: str) -> None:
         print(f"  {status}", end="\r", flush=True)
@@ -83,7 +119,14 @@ def _run_cli(args) -> int:
         print(f"\n{'='*60}")
         print(f"Image {idx}/{total}: {img_path}")
         print(f"{'='*60}")
-        print(f"Analysing with model '{args.model}' [{mode}]…")
+        reasoning_backend = args.reasoning_backend
+        if args.reasoning_adapter and reasoning_backend == "ollama":
+            reasoning_backend = "huggingface"
+        reasoning_model = args.reasoning_model or args.model
+        print(
+            f"Analysing with vision model '{args.model}' and {reasoning_backend} "
+            f"reasoning model '{reasoning_model}' [{mode}]…"
+        )
         print(f"  Pass 1 – identifying object…", end="\r", flush=True)
         try:
             result = analyzer.analyse(

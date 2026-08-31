@@ -4,8 +4,9 @@ from __future__ import annotations
 
 import base64
 import sys
+import types
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock, call, patch
 
 import pytest
 
@@ -57,6 +58,109 @@ def create_dummy_image(tmp_path_factory):
 # ---------------------------------------------------------------------------
 
 from pyantique_prices.analyzer import AntiqueAnalyzer
+
+
+class _FakeTensor:
+    def __init__(self, values):
+        self.values = values
+        self.shape = (1, len(values))
+
+    def to(self, device):
+        self.device = device
+        return self
+
+    def __getitem__(self, key):
+        return self.values[key]
+
+
+class _FakeTokenizer:
+    def __init__(self, decoded_text="hf appraisal"):
+        self.decoded_text = decoded_text
+        self.pad_token_id = None
+        self.eos_token_id = 99
+        self.eos_token = "<eos>"
+        self.pad_token = None
+        self.last_prompt = ""
+        self.last_messages = None
+
+    def apply_chat_template(self, messages, tokenize=False, add_generation_prompt=False):
+        self.last_messages = messages
+        return "FORMATTED PROMPT"
+
+    def __call__(self, text, return_tensors="pt"):
+        self.last_prompt = text
+        return {
+            "input_ids": _FakeTensor([11, 12, 13]),
+            "attention_mask": _FakeTensor([1, 1, 1]),
+        }
+
+    def decode(self, tokens, skip_special_tokens=True):
+        return self.decoded_text
+
+
+class _FakeModel:
+    def __init__(self):
+        self.device = "cpu"
+        self.loaded_adapter = None
+        self.generate_kwargs = None
+        self.eval_called = False
+
+    def to(self, device):
+        self.device = device
+        return self
+
+    def eval(self):
+        self.eval_called = True
+        return self
+
+    def generate(self, **kwargs):
+        self.generate_kwargs = kwargs
+        return [[11, 12, 13, 21, 22]]
+
+
+class _FakeInferenceMode:
+    def __enter__(self):
+        return None
+
+    def __exit__(self, exc_type, exc, tb):
+        return False
+
+
+def _make_fake_huggingface_modules(decoded_text="hf appraisal"):
+    tokenizer = _FakeTokenizer(decoded_text=decoded_text)
+    model = _FakeModel()
+
+    class _FakeAutoTokenizer:
+        @staticmethod
+        def from_pretrained(model_name):
+            tokenizer.model_name = model_name
+            return tokenizer
+
+    class _FakeAutoModelForCausalLM:
+        @staticmethod
+        def from_pretrained(model_name, **kwargs):
+            model.model_name = model_name
+            model.load_kwargs = kwargs
+            return model
+
+    class _FakePeftModel:
+        @staticmethod
+        def from_pretrained(base_model, adapter_name):
+            base_model.loaded_adapter = adapter_name
+            return base_model
+
+    fake_transformers = types.SimpleNamespace(
+        AutoTokenizer=_FakeAutoTokenizer,
+        AutoModelForCausalLM=_FakeAutoModelForCausalLM,
+        tokenizer_instance=tokenizer,
+        model_instance=model,
+    )
+    fake_peft = types.SimpleNamespace(PeftModel=_FakePeftModel)
+    fake_torch = types.SimpleNamespace(
+        cuda=types.SimpleNamespace(is_available=lambda: False),
+        inference_mode=lambda: _FakeInferenceMode(),
+    )
+    return fake_transformers, fake_peft, fake_torch
 
 
 class TestEncodeImage:
@@ -115,30 +219,43 @@ class TestParsePriceRange:
 
 
 class TestAnalyse:
-    def _make_mock_ollama(self, content="This is a fine 19th century vase worth €400-€600.", model="minicpm-v"):
+    def _make_mock_ollama(self, content="This is a fine 19th century vase worth €400-€600.", models=None):
         mock_ollama = MagicMock()
         mock_ollama.chat.return_value = {"message": {"content": content}}
         # Simulate model already present locally (new SDK: object with .models attribute)
-        model_obj = MagicMock()
-        model_obj.model = model
         list_response = MagicMock()
-        list_response.models = [model_obj]
+        list_response.models = []
+        for model in models or ["minicpm-v"]:
+            model_obj = MagicMock()
+            model_obj.model = model
+            list_response.models.append(model_obj)
         mock_ollama.list.return_value = list_response
         return mock_ollama
 
-    def test_analyse_calls_ollama(self):
-        mock_ollama = self._make_mock_ollama()
+    def test_analyse_uses_separate_models_for_each_pass(self):
+        mock_ollama = self._make_mock_ollama(models=["minicpm-v", "qwen3:8b"])
+        mock_ollama.chat.side_effect = [
+            {"message": {"content": "Spanish ceramic bowl.\n---\nspanish ceramic bowl, talavera, glazed earthenware"}},
+            {"message": {"content": "This is a fine 19th century vase worth €400-€600."}},
+        ]
 
         with patch.dict(sys.modules, {"ollama": mock_ollama}):
-            analyzer = AntiqueAnalyzer(model="minicpm-v")
+            analyzer = AntiqueAnalyzer(model="minicpm-v", reasoning_model="qwen3:8b")
             result = analyzer.analyse(DUMMY_IMAGE, context="Blue vase")
 
-        # chat is called at least twice: once for keyword generation, once for appraisal
-        assert mock_ollama.chat.call_count >= 2
+        assert mock_ollama.chat.call_count == 2
+        assert mock_ollama.chat.call_args_list[0].kwargs["model"] == "minicpm-v"
+        assert mock_ollama.chat.call_args_list[1].kwargs["model"] == "qwen3:8b"
+        assert "images" in mock_ollama.chat.call_args_list[0].kwargs["messages"][1]
+        assert "images" not in mock_ollama.chat.call_args_list[1].kwargs["messages"][1]
         assert "vase" in result.lower()
 
     def test_analyse_uses_context_and_prices(self):
         mock_ollama = self._make_mock_ollama(content="appraisal text")
+        mock_ollama.chat.side_effect = [
+            {"message": {"content": "French clock.\n---\nfrench clock, gilt bronze mantel clock"}},
+            {"message": {"content": "appraisal text"}},
+        ]
 
         with patch.dict(sys.modules, {"ollama": mock_ollama}):
             analyzer = AntiqueAnalyzer()
@@ -148,16 +265,20 @@ class TestAnalyse:
                 reference_prices="Similar clocks: 300-500 EUR",
             )
 
-        # When reference_prices is pre-supplied, only the appraisal chat call is made
-        mock_ollama.chat.assert_called_once()
-        call_args = mock_ollama.chat.call_args
-        messages = call_args.kwargs.get("messages") or call_args.args[0].get("messages", []) if call_args.args else call_args.kwargs["messages"]
+        assert mock_ollama.chat.call_count == 2
+        call_args = mock_ollama.chat.call_args_list[-1]
+        messages = call_args.kwargs["messages"]
         user_message = next(m for m in messages if m["role"] == "user")
         assert "grandmother" in user_message["content"]
         assert "300-500" in user_message["content"]
+        assert "French clock" in user_message["content"]
 
     def test_deep_thinking_prompt_includes_thinking_section(self):
         mock_ollama = self._make_mock_ollama(content="deep result")
+        mock_ollama.chat.side_effect = [
+            {"message": {"content": "Porcelain vase.\n---\nporcelain vase, qing"}},
+            {"message": {"content": "deep result"}},
+        ]
 
         with patch.dict(sys.modules, {"ollama": mock_ollama}):
             analyzer = AntiqueAnalyzer(deep_thinking=True)
@@ -171,6 +292,10 @@ class TestAnalyse:
 
     def test_standard_prompt_no_thinking_section(self):
         mock_ollama = self._make_mock_ollama(content="standard result")
+        mock_ollama.chat.side_effect = [
+            {"message": {"content": "Porcelain vase.\n---\nporcelain vase, qing"}},
+            {"message": {"content": "standard result"}},
+        ]
 
         with patch.dict(sys.modules, {"ollama": mock_ollama}):
             analyzer = AntiqueAnalyzer(deep_thinking=False)
@@ -195,10 +320,12 @@ class TestAnalyse:
         mock_ollama.pull.return_value = iter([prog])
 
         with patch.dict(sys.modules, {"ollama": mock_ollama}):
-            analyzer = AntiqueAnalyzer(model="minicpm-v")
+            analyzer = AntiqueAnalyzer(model="minicpm-v", reasoning_model="qwen3:8b")
             analyzer.analyse(DUMMY_IMAGE)
 
-        mock_ollama.pull.assert_called_once_with("minicpm-v", stream=True)
+        mock_ollama.pull.assert_has_calls(
+            [call("minicpm-v", stream=True), call("qwen3:8b", stream=True)]
+        )
         assert mock_ollama.chat.call_count >= 1
 
     def test_pull_failure_raises_runtime_error(self):
@@ -209,15 +336,19 @@ class TestAnalyse:
         mock_ollama.pull.side_effect = Exception("connection refused")
 
         with patch.dict(sys.modules, {"ollama": mock_ollama}):
-            analyzer = AntiqueAnalyzer(model="minicpm-v")
+            analyzer = AntiqueAnalyzer(model="minicpm-v", reasoning_model="qwen3:8b")
             with pytest.raises(RuntimeError, match="Failed to download model"):
                 analyzer.analyse(DUMMY_IMAGE)
 
     def test_skips_pull_when_model_present(self):
-        mock_ollama = self._make_mock_ollama()
+        mock_ollama = self._make_mock_ollama(models=["minicpm-v", "qwen3:8b"])
+        mock_ollama.chat.side_effect = [
+            {"message": {"content": "Porcelain vase.\n---\nporcelain vase, qing"}},
+            {"message": {"content": "ok"}},
+        ]
 
         with patch.dict(sys.modules, {"ollama": mock_ollama}):
-            analyzer = AntiqueAnalyzer(model="minicpm-v")
+            analyzer = AntiqueAnalyzer(model="minicpm-v", reasoning_model="qwen3:8b")
             analyzer.analyse(DUMMY_IMAGE)
 
         mock_ollama.pull.assert_not_called()
@@ -227,10 +358,14 @@ class TestAnalyse:
         mock_ollama = MagicMock()
         mock_ollama.chat.return_value = {"message": {"content": "ok"}}
         # Old SDK: plain dict
-        mock_ollama.list.return_value = {"models": [{"name": "minicpm-v"}]}
+        mock_ollama.list.return_value = {"models": [{"name": "minicpm-v"}, {"name": "qwen3:8b"}]}
+        mock_ollama.chat.side_effect = [
+            {"message": {"content": "Porcelain vase.\n---\nporcelain vase, qing"}},
+            {"message": {"content": "ok"}},
+        ]
 
         with patch.dict(sys.modules, {"ollama": mock_ollama}):
-            analyzer = AntiqueAnalyzer(model="minicpm-v")
+            analyzer = AntiqueAnalyzer(model="minicpm-v", reasoning_model="qwen3:8b")
             analyzer.analyse(DUMMY_IMAGE)
 
         mock_ollama.pull.assert_not_called()
@@ -245,6 +380,111 @@ class TestAnalyse:
         with patch.dict(sys.modules, {"ollama": mock_ollama}):
             analyzer = AntiqueAnalyzer(model="gpt-oss:20b")
             with pytest.raises(ValueError, match="does not support image"):
+                analyzer.analyse(DUMMY_IMAGE)
+
+    def test_reasoning_model_can_be_text_only(self):
+        mock_ollama = self._make_mock_ollama(models=["minicpm-v", "gpt-oss:20b"])
+        mock_ollama.chat.side_effect = [
+            {"message": {"content": "Porcelain vase.\n---\nporcelain vase, qing"}},
+            {"message": {"content": "text-only appraisal"}},
+        ]
+
+        with patch.dict(sys.modules, {"ollama": mock_ollama}):
+            analyzer = AntiqueAnalyzer(model="minicpm-v", reasoning_model="gpt-oss:20b")
+            result = analyzer.analyse(DUMMY_IMAGE)
+
+        assert result == "text-only appraisal"
+        assert "images" not in mock_ollama.chat.call_args_list[-1].kwargs["messages"][1]
+
+    def test_huggingface_reasoning_with_peft_adapter(self):
+        mock_ollama = self._make_mock_ollama(models=["minicpm-v"])
+        mock_ollama.chat.return_value = {
+            "message": {"content": "Porcelain vase.\n---\nporcelain vase, qing"}
+        }
+        fake_transformers, fake_peft, fake_torch = _make_fake_huggingface_modules(
+            decoded_text="hf appraisal"
+        )
+
+        with patch.dict(
+            sys.modules,
+            {
+                "ollama": mock_ollama,
+                "transformers": fake_transformers,
+                "peft": fake_peft,
+                "torch": fake_torch,
+            },
+        ):
+            analyzer = AntiqueAnalyzer(
+                model="minicpm-v",
+                reasoning_backend="huggingface",
+                reasoning_model="meta-llama/Meta-Llama-3.1-8B",
+                reasoning_adapter="jordanmatsumoto/pricing-specialist",
+            )
+            result = analyzer.analyse(DUMMY_IMAGE, context="Estate find")
+
+        assert result == "hf appraisal"
+        assert mock_ollama.chat.call_count == 1
+        assert fake_transformers.model_instance.model_name == "meta-llama/Meta-Llama-3.1-8B"
+        assert fake_transformers.model_instance.loaded_adapter == "jordanmatsumoto/pricing-specialist"
+        assert fake_transformers.model_instance.eval_called is True
+        assert fake_transformers.model_instance.generate_kwargs["max_new_tokens"] == 768
+        assert fake_transformers.tokenizer_instance.last_messages[0]["role"] == "system"
+
+    def test_reasoning_adapter_switches_backend_to_huggingface(self):
+        analyzer = AntiqueAnalyzer(
+            model="minicpm-v",
+            reasoning_model="meta-llama/Meta-Llama-3.1-8B",
+            reasoning_adapter="jordanmatsumoto/pricing-specialist",
+        )
+
+        assert analyzer.reasoning_backend == "huggingface"
+
+    def test_huggingface_reasoning_missing_dependencies_raises_runtime_error(self):
+        mock_ollama = self._make_mock_ollama(models=["minicpm-v"])
+        mock_ollama.chat.return_value = {
+            "message": {"content": "Porcelain vase.\n---\nporcelain vase, qing"}
+        }
+
+        with patch.dict(
+            sys.modules,
+            {
+                "ollama": mock_ollama,
+                "transformers": None,
+                "peft": None,
+                "torch": None,
+            },
+        ):
+            analyzer = AntiqueAnalyzer(
+                model="minicpm-v",
+                reasoning_backend="huggingface",
+                reasoning_model="meta-llama/Meta-Llama-3.1-8B",
+            )
+            with pytest.raises(RuntimeError, match="Install them with"):
+                analyzer.analyse(DUMMY_IMAGE)
+
+    def test_huggingface_reasoning_missing_peft_raises_runtime_error(self):
+        mock_ollama = self._make_mock_ollama(models=["minicpm-v"])
+        mock_ollama.chat.return_value = {
+            "message": {"content": "Porcelain vase.\n---\nporcelain vase, qing"}
+        }
+        fake_transformers, _, fake_torch = _make_fake_huggingface_modules()
+
+        with patch.dict(
+            sys.modules,
+            {
+                "ollama": mock_ollama,
+                "transformers": fake_transformers,
+                "peft": None,
+                "torch": fake_torch,
+            },
+        ):
+            analyzer = AntiqueAnalyzer(
+                model="minicpm-v",
+                reasoning_backend="huggingface",
+                reasoning_model="meta-llama/Meta-Llama-3.1-8B",
+                reasoning_adapter="jordanmatsumoto/pricing-specialist",
+            )
+            with pytest.raises(RuntimeError, match="PEFT adapters require"):
                 analyzer.analyse(DUMMY_IMAGE)
 
     def test_other_error_reraises_unchanged(self):

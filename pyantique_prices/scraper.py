@@ -16,6 +16,13 @@ logger = logging.getLogger(__name__)
 _USER_AGENT = "pyAntiquePrices/0.1 (+https://github.com/Pablo1990/pyAntiquePrices)"
 _REQUEST_TIMEOUT = 15  # seconds
 _DEFAULT_CRAWL_DELAY = 3.0
+_MARKET_SITES = (
+    "site:todocoleccion.net",
+    "site:setdart.com",
+    "site:catawiki.com",
+    "site:liveauctioneers.com",
+    "site:invaluable.com",
+)
 
 
 # ---------------------------------------------------------------------------
@@ -97,8 +104,10 @@ class DuckDuckGoScraper(_BaseScraper):
             logger.warning("DuckDuckGo robots.txt disallows scraping – skipping.")
             return ""
 
-        # Append antique/price keywords to narrow results
-        enriched = f"{query} antique price appraisal site:catawiki.com OR site:liveauctioneers.com OR site:invaluable.com"
+        # Append antique/price keywords to narrow results, prioritising the
+        # Spanish market before broader auction platforms.
+        market_scope = " OR ".join(_MARKET_SITES)
+        enriched = f"{query} antique price appraisal spain {market_scope}"
         url = f"{self.base_url}{self._SEARCH_PATH}?q={quote_plus(enriched)}&kl=wt-wt"
         logger.debug("DuckDuckGo search: %s", url)
         html = self._fetch(url)
