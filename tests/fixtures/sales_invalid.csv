@@ -1,0 +1,3 @@
+title,description,category,subcategory,object_type,period,manufacturer,artist,condition,country,auction_house,sale_date,currency,final_price,source_url,price_basis
+Broken Listing,Invalid price row,Ceramics,Bowl,Bowl,19th century,,,,fair,Spain,Example,2024-02-01,EUR,not-a-number,https://example.com/sale/2,realized
+Unsupported Currency,Unsupported currency row,Ceramics,Bowl,Bowl,19th century,,,,fair,Spain,Example,2024-02-02,SEK,150,https://example.com/sale/3,realized
