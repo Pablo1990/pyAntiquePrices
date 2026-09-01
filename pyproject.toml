@@ -5,10 +5,10 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "pyantique-prices"
 version = "0.1.0"
-description = "Estimate the price and age of antiques from an image using a local LLM via Ollama"
+description = "Estimate antique identification and value from local photos using Ollama"
 readme = "README.md"
 license = { file = "LICENSE" }
-requires-python = ">=3.10"
+requires-python = ">=3.11"
 dependencies = [
     "ollama>=0.2.0",
     "requests>=2.31.0",

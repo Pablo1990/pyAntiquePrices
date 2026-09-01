@@ -16,7 +16,7 @@ class OllamaClient:
     def __init__(
         self,
         host: str = "http://localhost:11434",
-        model: str = "minicpm-v",
+        model: str = "qwen3-vl:8b",
     ) -> None:
         self.host = host
         self.model = model
