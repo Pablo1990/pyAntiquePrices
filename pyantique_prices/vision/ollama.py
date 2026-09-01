@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import base64
 import logging
+import re
 from pathlib import Path
 from typing import Any
 
@@ -16,10 +17,12 @@ class OllamaClient:
     def __init__(
         self,
         host: str = "http://localhost:11434",
-        model: str = "minicpm-v",
+        model: str = "qwen3-vl:8b",
+        num_ctx: int = 8192,
     ) -> None:
         self.host = host
         self.model = model
+        self.num_ctx = num_ctx
         self._client = None
 
     def _get_client(self):
@@ -74,11 +77,26 @@ class OllamaClient:
             messages.append({"role": "system", "content": system})
         messages.append({"role": "user", "content": prompt, "images": encoded})
 
-        response = client.chat(model=self.model, messages=messages)
+        response = client.chat(
+            model=self.model,
+            messages=messages,
+            options={"num_ctx": self.num_ctx},
+        )
         message = getattr(response, "message", None)
         if message is not None:
             return getattr(message, "content", "")
         return response["message"]["content"]
+
+
+def is_context_overflow_error(exc: Exception) -> bool:
+    message = str(exc)
+    patterns = [
+        r"exceeds the available context size",
+        r"exceed_context_size_error",
+        r"\bn_ctx\b",
+        r"\bcontext size\b",
+    ]
+    return any(re.search(pattern, message, re.IGNORECASE) for pattern in patterns)
 
     def embed_text(self, text: str) -> list[float]:
         """Generate text embeddings."""

@@ -7,7 +7,7 @@ from fastapi import FastAPI
 from pyantique_prices.config import Settings
 from pyantique_prices.data.database import create_tables, get_engine, get_session_factory
 from pyantique_prices.pricing.model import PricePredictor
-from pyantique_prices.services.appraisal import AppraisalService
+from pyantique_prices.services.appraisal import AppraisalService, LegacyWebFallbackEstimator
 from pyantique_prices.vision.analyzer import MultiImageAnalyzer
 from pyantique_prices.vision.ollama import OllamaClient
 
@@ -23,7 +23,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     create_tables(engine)
     session_factory = get_session_factory(engine)
 
-    client = OllamaClient(host=settings.ollama_host, model=settings.ollama_vision_model)
+    client = OllamaClient(
+        host=settings.ollama_host,
+        model=settings.ollama_vision_model,
+        num_ctx=settings.ollama_num_ctx,
+    )
     analyzer = MultiImageAnalyzer(client=client)
     pricer = PricePredictor(
         min_comparables_for_model=settings.min_comparables_for_model,
@@ -33,6 +37,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         analyzer=analyzer,
         retrieval_session_factory=session_factory,
         pricer=pricer,
+        fallback_estimator=LegacyWebFallbackEstimator(model=settings.ollama_vision_model),
         base_currency=settings.base_currency,
         min_comparables_for_model=settings.min_comparables_for_model,
         min_comparables_for_confidence=settings.min_comparables_for_confidence,
