@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import pickle
+from pathlib import Path
+
 from pyantique_prices.pricing.calibration import compute_metrics
 from pyantique_prices.pricing.features import condition_to_float, extract_features
 from pyantique_prices.pricing.model import PricePredictor
@@ -26,6 +29,18 @@ def test_extract_features_computes_price_statistics():
     assert features["condition_score"] == 0.7
     assert features["median_comparable_price"] == 200.0
     assert features["num_comparables"] == 3
+
+
+def test_extract_features_supports_structured_values():
+    identification = {
+        "object_type": {"value": "clock"},
+        "country": {"value": "France"},
+        "condition": {"value": "good"},
+    }
+    features = extract_features(identification, [{"normalized_price": 100.0}])
+    assert features["object_type"] == "clock"
+    assert features["country"] == "France"
+    assert features["condition_score"] == 0.7
 
 
 def test_price_predictor_returns_quantile_estimate():
@@ -55,6 +70,41 @@ def test_price_predictor_uses_reference_only_for_1_to_2_comparables():
     assert result["valuation_available"] is False
     assert result["method"] == "reference_only"
     assert result["confidence_note"] == "Very low confidence: only 1-2 comparable sales."
+
+
+def test_price_predictor_uses_artifact_model_when_available(tmp_path):
+    models_dir = Path(tmp_path) / "models"
+    quantiles_dir = models_dir / "quantile_models"
+    quantiles_dir.mkdir(parents=True)
+
+    model = {
+        "model_type": "bucket_median_v1",
+        "global_median": 900.0,
+        "by_object": {"clock": 1000.0},
+        "by_object_country": {"clock|france": 1200.0},
+        "residual_quantiles": {
+            "p10": -200.0,
+            "p25": -100.0,
+            "p50": 0.0,
+            "p75": 150.0,
+            "p90": 250.0,
+        },
+    }
+    calibrator = {"scale": 1.0, "bias": 0.0}
+    with (models_dir / "price_model.pkl").open("wb") as handle:
+        pickle.dump(model, handle)
+    with (models_dir / "calibrator.pkl").open("wb") as handle:
+        pickle.dump(calibrator, handle)
+
+    predictor = PricePredictor(model_dir=str(models_dir))
+    comparables = [{"normalized_price": float(1000 + i * 10)} for i in range(6)]
+    result = predictor.predict(
+        {"object_type": "clock", "country": "France", "condition_score": 0.7},
+        comparables,
+    )
+    assert result is not None
+    assert result["method"] == "model_quantile_estimate"
+    assert result["mid"] == 1200.0
 
 
 def test_quantiles_and_metrics():

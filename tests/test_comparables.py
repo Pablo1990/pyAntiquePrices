@@ -21,6 +21,18 @@ def test_score_comparable_rewards_matching_fields():
     assert score == 0.25
 
 
+def test_score_comparable_handles_structured_identification_values():
+    score = score_comparable(
+        {
+            "object_type": {"value": "clock"},
+            "country": {"value": "France"},
+            "condition": {"value": "good"},
+        },
+        {"object_type": "Mantel Clock", "country": "France", "condition": "good"},
+    )
+    assert score == 0.25
+
+
 def test_retrieve_comparables_orders_by_score():
     with _make_session() as session:
         session.add_all(

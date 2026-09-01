@@ -14,6 +14,14 @@ DEFAULT_WEIGHTS = {
 }
 
 
+def _normalized_text(value) -> str:
+    if isinstance(value, dict):
+        value = value.get("value")
+    if value is None:
+        return ""
+    return str(value).strip().lower()
+
+
 def score_comparable(
     identification: dict,
     sale: dict,
@@ -24,16 +32,23 @@ def score_comparable(
         weights = DEFAULT_WEIGHTS
     score = 0.0
 
-    if identification.get("object_type") and sale.get("object_type"):
-        if identification["object_type"].lower() in sale["object_type"].lower():
+    ident_object = _normalized_text(identification.get("object_type"))
+    sale_object = _normalized_text(sale.get("object_type"))
+    ident_country = _normalized_text(identification.get("country"))
+    sale_country = _normalized_text(sale.get("country"))
+    ident_condition = _normalized_text(identification.get("condition"))
+    sale_condition = _normalized_text(sale.get("condition"))
+
+    if ident_object and sale_object:
+        if ident_object in sale_object:
             score += weights.get("object_type", 0.15)
 
-    if identification.get("country") and sale.get("country"):
-        if identification["country"].lower() == sale["country"].lower():
+    if ident_country and sale_country:
+        if ident_country == sale_country:
             score += weights.get("country", 0.05)
 
-    if identification.get("condition") and sale.get("condition"):
-        if identification["condition"].lower() == sale["condition"].lower():
+    if ident_condition and sale_condition:
+        if ident_condition == sale_condition:
             score += weights.get("condition", 0.05)
 
     return score

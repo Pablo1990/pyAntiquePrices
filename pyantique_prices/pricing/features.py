@@ -16,7 +16,14 @@ CONDITION_SCALE = {
 }
 
 
+def _extract_value(value):
+    if isinstance(value, dict):
+        return value.get("value")
+    return value
+
+
 def condition_to_float(condition: str | None) -> float:
+    condition = _extract_value(condition)
     if condition is None:
         return 0.5
     return CONDITION_SCALE.get(condition.lower().strip(), 0.5)
@@ -29,11 +36,14 @@ def extract_features(identification: dict, comparables: list[dict]) -> dict[str,
         for comparable in comparables
         if comparable.get("normalized_price")
     ]
+    object_type = _extract_value(identification.get("object_type")) or ""
+    country = _extract_value(identification.get("country")) or ""
+    condition = _extract_value(identification.get("condition"))
 
     return {
-        "object_type": identification.get("object_type", ""),
-        "country": identification.get("country", ""),
-        "condition_score": condition_to_float(identification.get("condition")),
+        "object_type": object_type,
+        "country": country,
+        "condition_score": condition_to_float(condition),
         "num_comparables": len(prices),
         "median_comparable_price": float(np.median(prices)) if prices else 0.0,
         "mean_comparable_price": float(np.mean(prices)) if prices else 0.0,

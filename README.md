@@ -19,8 +19,10 @@
 10. [Deep thinking mode](#deep-thinking-mode)
 11. [Batch processing](#batch-processing)
 12. [Troubleshooting](#troubleshooting)
-13. [Development](#development)
-14. [Legal & ethical notes](#legal--ethical-notes)
+13. [REST API (FastAPI)](#rest-api-fastapi)
+14. [Model training workflow](#model-training-workflow)
+15. [Development](#development)
+16. [Legal & ethical notes](#legal--ethical-notes)
 
 ---
 
@@ -360,6 +362,73 @@ Per-image errors are reported to `stderr` without stopping the batch.
 
 ---
 
+## REST API (FastAPI)
+
+Run the API server:
+
+```bash
+pip install -e ".[api]"
+uvicorn pyantique_prices.api.app:app --reload
+```
+
+Endpoints:
+
+- `POST /appraise` (multipart, 3-5 images; JPEG/PNG/WebP)
+- `GET /health`
+- `GET /models`
+- `GET /sales/{id}`
+- `GET /appraisals/{id}`
+
+`POST /appraise` optional form fields:
+
+- `currency`
+- `location`
+- `known_dimensions`
+- `user_description`
+- `provenance`
+
+---
+
+## Model training workflow
+
+Import historical sales:
+
+```bash
+python scripts/import_sales.py data/sales.csv
+```
+
+Generate text embeddings for imported sales:
+
+```bash
+python scripts/index_sales.py
+```
+
+Train pricing artifacts:
+
+```bash
+python scripts/train_price_model.py
+```
+
+Evaluate pricing artifacts (time-aware validation/test):
+
+```bash
+python scripts/evaluate_model.py
+```
+
+Expected artifacts:
+
+```text
+models/
+  price_model.pkl
+  quantile_models/
+    p10.pkl p25.pkl p50.pkl p75.pkl p90.pkl
+  calibrator.pkl
+  feature_schema.json
+  metrics.json
+```
+
+---
+
 ## Troubleshooting
 
 ### `Connection refused` / Ollama not running
@@ -422,13 +491,13 @@ ollama pull llava:13b       # ~10 GB
 
 ```bash
 # Install with dev dependencies
-pip install -e ".[dev]"
+python -m pip install -e ".[dev]"
 
 # Run the test suite
-pytest tests/ -v
+python -m pytest -q
 
 # Run a specific test file
-pytest tests/test_analyzer.py -v
+python -m pytest -q tests/test_analyzer.py
 ```
 
 ### Project structure
@@ -438,12 +507,26 @@ pyAntiquePrices/
 ├── pyantique_prices/
 │   ├── __init__.py        # Public API exports
 │   ├── __main__.py        # CLI entry point
-│   ├── analyzer.py        # AntiqueAnalyzer – LLM appraisal logic
-│   ├── scraper.py         # DuckDuckGoScraper, MultiSourceScraper
+│   ├── analyzer.py        # Legacy appraisal flow
+│   ├── scraper.py         # Legacy scraper
+│   ├── api/               # FastAPI app and routes
+│   ├── data/              # SQLAlchemy models/importer
+│   ├── retrieval/         # Comparable retrieval/ranking
+│   ├── pricing/           # Features/model/calibration/training helpers
+│   ├── services/          # Appraisal orchestration
+│   ├── vision/            # Multi-image vision schemas/analyzer/client
 │   └── gui.py             # Tkinter GUI
 ├── tests/
 │   ├── test_analyzer.py
-│   └── test_scraper.py
+│   ├── test_scraper.py
+│   ├── test_api.py
+│   ├── test_pricing.py
+│   └── ...
+├── scripts/
+│   ├── import_sales.py
+│   ├── index_sales.py
+│   ├── train_price_model.py
+│   └── evaluate_model.py
 ├── pyproject.toml
 └── README.md
 ```
