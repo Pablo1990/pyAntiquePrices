@@ -70,9 +70,9 @@ Scraping is fully automatic — you don't need to supply any keywords unless you
 
 | Requirement | Notes |
 |---|---|
-| **Python ≥ 3.9** | |
+| **Python ≥ 3.11** | |
 | **[Ollama](https://ollama.com/)** | Must be installed and running. Download from [ollama.com](https://ollama.com/download). |
-| **A vision-capable model** | Auto-downloaded on first use, or run `ollama pull minicpm-v` in advance. |
+| **A vision-capable model** | Auto-downloaded on first use, or run `ollama pull qwen3-vl:8b` in advance. |
 | **Optional: Hugging Face reasoning stack** | Needed only if you want Pass 2 price estimation via `transformers` + `peft` instead of Ollama. |
 | `ollama` Python SDK | Installed automatically via `pip`. |
 | `requests`, `beautifulsoup4` | Web scraper (installed automatically). |
@@ -99,10 +99,18 @@ ollama serve          # macOS/Linux background daemon
 # On Windows: Ollama runs as a system tray application after installation
 ```
 
-The first time you analyse an image, any selected model that is not already available locally will be automatically downloaded. To pre-download the default vision model:
+The first time you analyse an image, any selected model that is not already available locally will be automatically downloaded. To pre-download the default vision and embedding models:
 
 ```bash
-ollama pull minicpm-v
+ollama pull qwen3-vl:8b
+ollama pull embeddinggemma
+```
+
+If multi-photo analysis hits an Ollama context-window error, increase the request
+context budget in your environment:
+
+```bash
+export OLLAMA_NUM_CTX=8192
 ```
 
 ---
@@ -135,8 +143,11 @@ The graphical interface opens immediately.
 ## Quick start – CLI
 
 ```bash
-# Single image, default models (minicpm-v for both passes), deep thinking on
+# Legacy single-image fallback workflow
 pyantique-prices --cli path/to/photo.jpg
+
+# AntiqueGPT object workflow: pass a folder with 3-5 photos of one object
+pyantique-prices --cli /path/to/object-photo-set/
 
 # With search keywords and additional context
 pyantique-prices --cli photo.jpg \
@@ -146,12 +157,12 @@ pyantique-prices --cli photo.jpg \
 # Specify a different vision model
 pyantique-prices --cli photo.jpg --model llava:13b
 
-# Use separate models for vision and valuation
-pyantique-prices --cli photo.jpg --model minicpm-v --reasoning-model qwen3:8b
+# Use separate models for the legacy single-image workflow
+pyantique-prices --cli photo.jpg --model qwen3-vl:8b --reasoning-model qwen3:8b
 
 # Use a Hugging Face PEFT model for Pass 2 price estimation
 pyantique-prices --cli photo.jpg \
-    --model minicpm-v \
+    --model qwen3-vl:8b \
     --reasoning-backend huggingface \
     --reasoning-model meta-llama/Meta-Llama-3.1-8B \
     --reasoning-adapter jordanmatsumoto/pricing-specialist
@@ -173,8 +184,8 @@ pyantique-prices --cli /path/to/antiques/ \
 
 | Option | Default | Description |
 |---|---|---|
-| `--cli IMAGE_OR_FOLDER` | — | Path to an image file or a directory of images. |
-| `--model MODEL` | `minicpm-v` | Pass-1 vision model. Must support vision. |
+| `--cli IMAGE_OR_FOLDER` | — | Path to an image file, or a directory with 3-5 photos of one object for the AntiqueGPT workflow. |
+| `--model MODEL` | `qwen3-vl:8b` | Vision model. Must support image inputs. |
 | `--reasoning-model MODEL` | same as `--model` | Pass-2 reasoning model. Use an Ollama name or a Hugging Face base-model repo id. |
 | `--reasoning-backend BACKEND` | `ollama` | Pass-2 backend: `ollama` or `huggingface`. |
 | `--reasoning-adapter ADAPTER` | *(empty)* | Optional Hugging Face PEFT adapter for Pass 2. |
@@ -239,7 +250,8 @@ These vision models are confirmed to work with **Ollama ≥ 0.30**.
 
 | Model | RAM / VRAM | Notes |
 |---|---|---|
-| **`minicpm-v`** *(default)* | ~5 GB | Best balance of accuracy and speed. Works on all Ollama versions. |
+| **`qwen3-vl:8b`** *(default)* | ~8 GB | Default AntiqueGPT vision model for structured multi-photo identification. |
+| `minicpm-v` | ~5 GB | Lightweight fallback that works well on lower-memory machines. |
 | `llava:13b` | ~10 GB | Larger LLaVA — stronger visual understanding. |
 | `llava` | ~4 GB | Original LLaVA 7B — lightweight fallback. |
 | `moondream` | ~2 GB | Very small; good for low-memory machines. |
@@ -249,7 +261,8 @@ These vision models are confirmed to work with **Ollama ≥ 0.30**.
 To install a model manually:
 
 ```bash
-ollama pull minicpm-v
+ollama pull qwen3-vl:8b
+ollama pull embeddinggemma
 ollama pull llava:13b
 ```
 
@@ -268,7 +281,7 @@ optional PEFT adapter.
 
 > ⚠️ **`llama3.2-vision` is NOT supported** by Ollama ≥ 0.30.  
 > It uses the `mllama` architecture which was removed when Ollama replaced its backend.  
-> Use `minicpm-v` or any model from the table above instead.
+> Use `qwen3-vl:8b`, `minicpm-v`, or another supported vision model from the table above instead.
 
 > ⚠️ **Text-only models** (e.g. `mistral`, `deepseek-r1`, `gemma`) will fail in **Pass 1** with:  
 > `Multimodal data provided, but model does not support multimodal requests.`  
@@ -447,7 +460,7 @@ Or on macOS/Windows, launch the Ollama application from your Applications folder
 You are using `llama3.2-vision` with Ollama ≥ 0.30. Switch to a supported model:
 
 ```bash
-pyantique-prices --model minicpm-v --cli photo.jpg
+pyantique-prices --model qwen3-vl:8b --cli photo.jpg
 ```
 
 ---
@@ -480,9 +493,24 @@ brew install python-tk
 Large models can be several gigabytes. Pre-download before running the app:
 
 ```bash
-ollama pull minicpm-v      # ~5 GB
+ollama pull qwen3-vl:8b    # default AntiqueGPT vision model
+ollama pull embeddinggemma # text embeddings for comparable retrieval
 ollama pull llava:13b       # ~10 GB
 ```
+
+---
+
+### `request exceeds the available context size`
+
+Your Ollama model rejected a large multi-photo prompt. Increase the context
+window before launching the app:
+
+```bash
+export OLLAMA_NUM_CTX=8192
+```
+
+If the problem persists, try `16384` or shorten the free-text description you
+provide with the photos.
 
 ---
 

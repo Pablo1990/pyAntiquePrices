@@ -11,6 +11,26 @@ class _FakeAnalyzer:
         return {"object_type": "clock", "country": "France", "condition": "good"}
 
 
+class _EmptyAnalyzer:
+    def analyze(self, images, context: str = ""):  # noqa: ARG002
+        return None
+
+
+class _FakeFallbackEstimator:
+    def estimate(self, images, context: str = ""):  # noqa: ARG002
+        return {
+            "low": 80.0,
+            "mid": 100.0,
+            "high": 150.0,
+            "p25": 80.0,
+            "p50": 100.0,
+            "p75": 150.0,
+            "valuation_available": False,
+            "method": "legacy_web_fallback",
+            "confidence_note": "Very low confidence",
+        }
+
+
 def _make_session_factory():
     engine = get_engine("sqlite:///:memory:")
     create_tables(engine)
@@ -47,3 +67,19 @@ def test_appraisal_service_uses_reference_estimate_for_1_to_2_comparables():
     assert result["identification_confidence"] > 0.0
     assert result["valuation_confidence"] > 0.0
     assert "Reference estimate only." in " ".join(result["warnings"])
+
+
+def test_appraisal_service_uses_fallback_estimate_when_no_local_comparables():
+    service = AppraisalService(
+        analyzer=_EmptyAnalyzer(),
+        fallback_estimator=_FakeFallbackEstimator(),
+    )
+
+    result = service.appraise(images=["/tmp/a.jpg", "/tmp/b.jpg", "/tmp/c.jpg"])
+
+    assert result["valuation"] is not None
+    assert result["valuation"]["method"] == "legacy_web_fallback"
+    assert result["valuation"]["mid"] == 100.0
+    assert result["valuation_available"] is False
+    assert result["valuation_confidence"] == 0.1
+    assert any("rough fallback estimate" in warning for warning in result["warnings"])

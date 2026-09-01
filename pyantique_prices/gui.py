@@ -8,7 +8,7 @@ from pathlib import Path
 from tkinter import filedialog, messagebox, scrolledtext, ttk
 
 from .config import Settings
-from .services.appraisal import AppraisalService
+from .services.appraisal import AppraisalService, LegacyWebFallbackEstimator
 from .vision.analyzer import MAX_IMAGES, MIN_IMAGES, SUPPORTED_EXTENSIONS, MultiImageAnalyzer
 from .vision.marks import MarkAnalysisService
 from .vision.ollama import OllamaClient
@@ -189,13 +189,13 @@ class App(tk.Tk):
             save_appraisal_fn = None
             db_warning = None
             try:
-                from .data.appraisals import save_appraisal as _save_appraisal
+                from .data.appraisals import persist_appraisal as _persist_appraisal
                 from .data.database import create_tables, get_engine, get_session_factory
 
                 engine = get_engine(settings.database_url)
                 create_tables(engine)
                 session_factory = get_session_factory(engine)
-                save_appraisal_fn = _save_appraisal
+                save_appraisal_fn = _persist_appraisal
             except ModuleNotFoundError as exc:
                 if exc.name == "sqlalchemy":
                     db_warning = (
@@ -204,7 +204,11 @@ class App(tk.Tk):
                     )
                 else:
                     raise
-            client = OllamaClient(host=settings.ollama_host, model=model)
+            client = OllamaClient(
+                host=settings.ollama_host,
+                model=model,
+                num_ctx=settings.ollama_num_ctx,
+            )
             analyzer = MultiImageAnalyzer(client=client, mark_service=MarkAnalysisService())
             pricer = None
             pricing_warning = None
@@ -226,6 +230,7 @@ class App(tk.Tk):
                 analyzer=analyzer,
                 retrieval_session_factory=session_factory,
                 pricer=pricer,
+                fallback_estimator=LegacyWebFallbackEstimator(model=model),
                 base_currency=settings.base_currency,
                 min_comparables_for_model=settings.min_comparables_for_model,
                 min_comparables_for_confidence=settings.min_comparables_for_confidence,
@@ -247,24 +252,25 @@ class App(tk.Tk):
                 result.setdefault("warnings", []).append(pricing_warning)
 
             if session_factory and save_appraisal_fn:
-                with session_factory() as session:
-                    save_appraisal_fn(
-                        session=session,
-                        result=result,
-                        input_metadata={
-                            "currency": currency,
-                            "location": location or None,
-                            "known_dimensions": dimensions or None,
-                            "provenance": provenance or None,
-                            "user_description": context or None,
-                            "num_images": len(image_paths),
-                            "source_images": [str(path) for path in image_paths],
-                        },
-                        model_versions={
-                            "vision_model": model,
-                            "pricing_model": _pricing_model_name(result),
-                        },
-                    )
+                _, persistence_warning = save_appraisal_fn(
+                    session_factory=session_factory,
+                    result=result,
+                    input_metadata={
+                        "currency": currency,
+                        "location": location or None,
+                        "known_dimensions": dimensions or None,
+                        "provenance": provenance or None,
+                        "user_description": context or None,
+                        "num_images": len(image_paths),
+                        "source_images": [str(path) for path in image_paths],
+                    },
+                    model_versions={
+                        "vision_model": model,
+                        "pricing_model": _pricing_model_name(result),
+                    },
+                )
+                if persistence_warning:
+                    result.setdefault("warnings", []).append(persistence_warning)
 
             formatted = _format_appraisal(result)
             self._after_safe(self._on_analysis_done, formatted)

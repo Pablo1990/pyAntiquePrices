@@ -61,6 +61,56 @@ def _compute_valuation_confidence(
     return 0.75 if valuation_available else 0.5
 
 
+def _fallback_valuation_confidence(n_comparables: int) -> float:
+    if n_comparables > 0:
+        return _compute_valuation_confidence(n_comparables, False)
+    return 0.1
+
+
+class LegacyWebFallbackEstimator:
+    """Use the preserved legacy analyzer as a last-resort rough estimate."""
+
+    def __init__(self, model: str = "qwen3-vl:8b") -> None:
+        self.model = model
+
+    def estimate(self, images: Sequence[Path | str], context: str = "") -> dict | None:
+        from pyantique_prices.analyzer import AntiqueAnalyzer
+        from pyantique_prices.scraper import MultiSourceScraper
+
+        first_image = next(iter(images), None)
+        if first_image is None:
+            return None
+
+        analyzer = AntiqueAnalyzer(
+            model=self.model,
+            reasoning_model=self.model,
+            deep_thinking=False,
+        )
+        appraisal_text = analyzer.analyse(
+            first_image,
+            context=context,
+            scraper=MultiSourceScraper(),
+        )
+        price_range = analyzer.parse_price_range(appraisal_text)
+        if not price_range:
+            return None
+        low, high = price_range
+        mid = round((low + high) / 2, 2)
+        return {
+            "p25": round(low, 2),
+            "p50": mid,
+            "p75": round(high, 2),
+            "low": round(low, 2),
+            "mid": mid,
+            "high": round(high, 2),
+            "num_comparables": 0,
+            "valuation_available": False,
+            "method": "legacy_web_fallback",
+            "confidence_note": "Very low confidence: fallback estimate from legacy web references.",
+            "appraisal_text": appraisal_text,
+        }
+
+
 class AppraisalService:
     """Orchestrates multi-image vision analysis, retrieval, and pricing."""
 
@@ -70,6 +120,7 @@ class AppraisalService:
         retrieval_session=None,
         retrieval_session_factory=None,
         pricer=None,
+        fallback_estimator=None,
         base_currency: str = "EUR",
         min_comparables_for_model: int = 6,
         min_comparables_for_confidence: int = 10,
@@ -82,6 +133,7 @@ class AppraisalService:
         self.retrieval_session = retrieval_session
         self.retrieval_session_factory = retrieval_session_factory
         self.pricer = pricer
+        self.fallback_estimator = fallback_estimator
         self.base_currency = base_currency
         self.min_comparables_for_model = min_comparables_for_model
         self.min_comparables_for_confidence = min_comparables_for_confidence
@@ -165,9 +217,36 @@ class AppraisalService:
 
         n_comparables = len(result["comparables"])
         if n_comparables == 0:
-            result["warnings"].append(
-                "No comparable sales found in the local database. Cannot estimate price."
-            )
+            fallback_used = False
+            if self.fallback_estimator:
+                try:
+                    fallback = self.fallback_estimator.estimate(images, context=context)
+                    if fallback:
+                        result["valuation"] = fallback
+                        result["valuation_available"] = False
+                        result["valuation_confidence"] = _fallback_valuation_confidence(0)
+                        result.setdefault("evidence", []).append(
+                            {
+                                "claim": f"Estimated value {currency} {fallback['low']} – {fallback['high']}",
+                                "source": "legacy_web_fallback",
+                                "confidence": result["valuation_confidence"],
+                                "evidence": {
+                                    "note": "Derived from the preserved legacy single-image workflow using scraped web references.",
+                                },
+                            }
+                        )
+                        result["warnings"].append(
+                            "No comparable sales were found in the local database. Returning a very rough fallback estimate from the preserved legacy web-reference workflow."
+                        )
+                        fallback_used = True
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning("Fallback estimation failed: %s", exc)
+                    result["warnings"].append(f"Fallback estimation failed: {exc}")
+
+            if not fallback_used:
+                result["warnings"].append(
+                    "No comparable sales found in the local database. Cannot estimate price."
+                )
             result["warnings"].append(
                 "Import historical sales first: "
                 "`python scripts/import_sales.py data/sales.csv` "

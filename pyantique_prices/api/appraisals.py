@@ -8,7 +8,10 @@ from typing import Any
 
 from fastapi import APIRouter, File, Form, HTTPException, Request, UploadFile
 
-from pyantique_prices.data.appraisals import get_appraisal_by_id, save_appraisal
+from pyantique_prices.data.appraisals import (
+    get_appraisal_by_id,
+    persist_appraisal,
+)
 
 from .schemas import AppraiseResponse
 
@@ -92,20 +95,21 @@ async def appraise(
         result = appraisal_service.appraise(temp_paths, context=context, currency=currency)
 
         session_factory = request.app.state.session_factory
-        with session_factory() as session:
-            save_appraisal(
-                session=session,
-                result=result,
-                input_metadata={
-                    "currency": currency,
-                    "location": location,
-                    "known_dimensions": known_dimensions,
-                    "user_description": user_description,
-                    "provenance": provenance,
-                    "num_images": len(images),
-                },
-                model_versions=model_version,
-            )
+        _, persistence_warning = persist_appraisal(
+            session_factory=session_factory,
+            result=result,
+            input_metadata={
+                "currency": currency,
+                "location": location,
+                "known_dimensions": known_dimensions,
+                "user_description": user_description,
+                "provenance": provenance,
+                "num_images": len(images),
+            },
+            model_versions=model_version,
+        )
+        if persistence_warning:
+            result.setdefault("warnings", []).append(persistence_warning)
 
         return _to_response(result, model_version=model_version)
     finally:

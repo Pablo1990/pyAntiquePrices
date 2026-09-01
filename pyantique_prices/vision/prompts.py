@@ -153,3 +153,26 @@ Additional context from the owner:
 """
 
 MULTI_IMAGE_PROMPT = STRUCTURED_IDENTIFICATION_PROMPT
+
+COMPACT_MULTI_IMAGE_PROMPT = """\
+Analyze these 3 to 5 photos of the same antique object together.
+
+Return compact valid JSON only with:
+- object_type
+- subtype
+- likely_period
+- country
+- region
+- materials
+- techniques
+- styles
+- condition
+- marks
+- manufacturer_candidates
+- uncertainty_notes
+
+Be concise. If uncertain, leave fields null or empty.
+
+Owner context:
+{context}
+"""
