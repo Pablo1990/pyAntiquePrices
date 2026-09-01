@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 from typing import Sequence
 
@@ -49,6 +50,39 @@ class MultiImageAnalyzer:
             "evidence": "Auto-converted from unstructured model output",
             "evidence_images": [],
         }
+
+    @staticmethod
+    def _extract_text_field(raw: str, keys: list[str]) -> str | None:
+        for key in keys:
+            pattern = rf"(?im)^\s*{re.escape(key)}\s*[:\-]\s*(.+?)\s*$"
+            match = re.search(pattern, raw)
+            if match:
+                value = match.group(1).strip()
+                if value:
+                    return value
+        return None
+
+    def _fallback_from_text(self, raw: str) -> dict:
+        object_type = self._extract_text_field(raw, ["object", "object type", "item"])
+        period = self._extract_text_field(raw, ["period", "date", "era"])
+        country = self._extract_text_field(raw, ["country", "origin", "region"])
+        condition = self._extract_text_field(raw, ["condition", "state"])
+        materials_text = self._extract_text_field(raw, ["materials", "material", "medium"])
+        materials = []
+        if materials_text:
+            materials = [item.strip() for item in re.split(r"[,;/]", materials_text) if item.strip()]
+        payload = {}
+        if object_type:
+            payload["object_type"] = object_type
+        if period:
+            payload["likely_period"] = period
+        if country:
+            payload["country"] = country
+        if condition:
+            payload["condition"] = condition
+        if materials:
+            payload["materials"] = materials
+        return payload
 
     def _normalize_payload(self, payload: dict) -> dict:
         evidence_fields = [
@@ -104,6 +138,8 @@ class MultiImageAnalyzer:
         prompt = MULTI_IMAGE_PROMPT.format(context=context or "None provided")
         raw = self.client.analyze_images(paths, prompt, system=SYSTEM_PROMPT)
         payload = self._extract_json(raw)
+        if not payload:
+            payload = self._fallback_from_text(raw)
         normalized = self._normalize_payload(payload)
         identification = AntiqueIdentification.model_validate(normalized).model_dump()
         enriched_marks = self.mark_service.analyze(identification)

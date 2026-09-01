@@ -16,6 +16,16 @@ class _FakeClient:
 }"""
 
 
+class _FakeTextClient:
+    def analyze_images(self, images, prompt: str, system: str | None = None):  # noqa: ARG002
+        assert len(images) == 3
+        return """Object: Oil painting
+Period: Late 19th century
+Country: France
+Materials: Oil on canvas
+Condition: fair"""
+
+
 def _touch_images(tmp_path: Path) -> list[Path]:
     files = []
     for idx in range(3):
@@ -39,3 +49,13 @@ def test_multi_image_analyzer_returns_structured_identification(tmp_path):
     assert result["country"]["value"] == "France"
     assert result["marks"][0]["normalized_text"] == "JAPY FRERES"
     assert result["manufacturer_candidates"][0]["name"] == "Japy Freres"
+
+
+def test_multi_image_analyzer_falls_back_to_text_fields(tmp_path):
+    files = _touch_images(tmp_path)
+    analyzer = MultiImageAnalyzer(client=_FakeTextClient())
+    result = analyzer.analyze(files, context="")
+    assert result["object_type"]["value"] == "Oil painting"
+    assert result["likely_period"]["value"] == "Late 19th century"
+    assert result["country"]["value"] == "France"
+    assert "Oil on canvas" in result["materials"]

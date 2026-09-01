@@ -10,6 +10,57 @@ from typing import Sequence
 logger = logging.getLogger(__name__)
 
 
+def _extract_confidence(value) -> float | None:
+    if isinstance(value, dict):
+        confidence = value.get("confidence")
+        if isinstance(confidence, (int, float)):
+            return float(confidence)
+    return None
+
+
+def _compute_identification_confidence(identification: dict | None) -> float:
+    if not identification:
+        return 0.0
+    confidence_values = []
+    for key in [
+        "object_type",
+        "subtype",
+        "likely_period",
+        "country",
+        "region",
+        "condition",
+        "rarity",
+        "image_quality",
+    ]:
+        confidence = _extract_confidence(identification.get(key))
+        if confidence is not None:
+            confidence_values.append(max(0.0, min(1.0, confidence)))
+    for mark in identification.get("marks", []) or []:
+        mark_confidence = mark.get("confidence")
+        if isinstance(mark_confidence, (int, float)):
+            confidence_values.append(max(0.0, min(1.0, float(mark_confidence))))
+    if confidence_values:
+        return float(sum(confidence_values) / len(confidence_values))
+    if identification.get("object_type"):
+        return 0.35
+    return 0.0
+
+
+def _compute_valuation_confidence(
+    n_comparables: int,
+    valuation_available: bool,
+) -> float:
+    if n_comparables <= 0:
+        return 0.0
+    if n_comparables < 3:
+        return 0.2
+    if n_comparables < 6:
+        return 0.35
+    if n_comparables < 10:
+        return 0.55 if valuation_available else 0.4
+    return 0.75 if valuation_available else 0.5
+
+
 class AppraisalService:
     """Orchestrates multi-image vision analysis, retrieval, and pricing."""
 
@@ -67,6 +118,9 @@ class AppraisalService:
             try:
                 analysis = self.analyzer.analyze(images, context=context)
                 result["identification"] = analysis
+                result["identification_confidence"] = _compute_identification_confidence(
+                    analysis
+                )
             except Exception as exc:  # noqa: BLE001
                 logger.error("Vision analysis failed: %s", exc)
                 result["warnings"].append(f"Vision analysis failed: {exc}")
@@ -112,7 +166,12 @@ class AppraisalService:
         n_comparables = len(result["comparables"])
         if n_comparables == 0:
             result["warnings"].append(
-                "No comparable sales found. Cannot estimate price."
+                "No comparable sales found in the local database. Cannot estimate price."
+            )
+            result["warnings"].append(
+                "Import historical sales first: "
+                "`python scripts/import_sales.py data/sales.csv` "
+                "then `python scripts/index_sales.py`."
             )
         else:
             if self.pricer and result["identification"]:
@@ -130,6 +189,10 @@ class AppraisalService:
                             "valuation_available",
                             False,
                         )
+                        result["valuation_confidence"] = _compute_valuation_confidence(
+                            n_comparables,
+                            result["valuation_available"],
+                        )
                         if n_comparables < 3:
                             result["warnings"].append(
                                 "Very few comparables (1-2). Reference estimate only."
@@ -145,6 +208,11 @@ class AppraisalService:
                 except Exception as exc:  # noqa: BLE001
                     logger.error("Pricing failed: %s", exc)
                     result["warnings"].append(f"Pricing failed: {exc}")
+            else:
+                result["valuation_confidence"] = _compute_valuation_confidence(
+                    n_comparables,
+                    False,
+                )
 
         result["warnings"].append(
             "This is an AI-assisted market estimate, not a formal appraisal."
