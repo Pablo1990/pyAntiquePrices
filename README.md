@@ -106,6 +106,13 @@ ollama pull qwen3-vl:8b
 ollama pull embeddinggemma
 ```
 
+If multi-photo analysis hits an Ollama context-window error, increase the request
+context budget in your environment:
+
+```bash
+export OLLAMA_NUM_CTX=8192
+```
+
 ---
 
 ## Quick start – GUI
@@ -490,6 +497,20 @@ ollama pull qwen3-vl:8b    # default AntiqueGPT vision model
 ollama pull embeddinggemma # text embeddings for comparable retrieval
 ollama pull llava:13b       # ~10 GB
 ```
+
+---
+
+### `request exceeds the available context size`
+
+Your Ollama model rejected a large multi-photo prompt. Increase the context
+window before launching the app:
+
+```bash
+export OLLAMA_NUM_CTX=8192
+```
+
+If the problem persists, try `16384` or shorten the free-text description you
+provide with the photos.
 
 ---
 

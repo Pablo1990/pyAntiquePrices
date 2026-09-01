@@ -209,7 +209,11 @@ def _run_object_cli(args, images) -> int:
         else:
             raise
 
-    client = OllamaClient(host=settings.ollama_host, model=args.model)
+    client = OllamaClient(
+        host=settings.ollama_host,
+        model=args.model,
+        num_ctx=settings.ollama_num_ctx,
+    )
     analyzer = MultiImageAnalyzer(client=client, mark_service=MarkAnalysisService())
     service = AppraisalService(
         analyzer=analyzer,

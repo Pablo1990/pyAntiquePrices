@@ -8,12 +8,13 @@ from pathlib import Path
 from typing import Sequence
 
 from .marks import MarkAnalysisService
-from .ollama import OllamaClient
+from .ollama import OllamaClient, is_context_overflow_error
 from .schemas import AntiqueIdentification
 
 MIN_IMAGES = 3
 MAX_IMAGES = 5
 SUPPORTED_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp"}
+MAX_CONTEXT_CHARS = 600
 
 
 def validate_images(images: Sequence[Path | str]) -> list[Path]:
@@ -130,13 +131,41 @@ class MultiImageAnalyzer:
                 return {}
         return {}
 
+    @staticmethod
+    def _truncate_context(context: str) -> str:
+        context = context.strip()
+        if len(context) <= MAX_CONTEXT_CHARS:
+            return context
+        return f"{context[:MAX_CONTEXT_CHARS].rstrip()}…"
+
     def analyze(self, images: Sequence[Path | str], context: str = "") -> dict:
         """Run multi-image analysis and return structured identification."""
         paths = validate_images(images)
-        from .prompts import MULTI_IMAGE_PROMPT, SYSTEM_PROMPT
+        from .prompts import (
+            COMPACT_MULTI_IMAGE_PROMPT,
+            MULTI_IMAGE_PROMPT,
+            SYSTEM_PROMPT,
+        )
 
-        prompt = MULTI_IMAGE_PROMPT.format(context=context or "None provided")
-        raw = self.client.analyze_images(paths, prompt, system=SYSTEM_PROMPT)
+        truncated_context = self._truncate_context(context)
+        prompt = MULTI_IMAGE_PROMPT.format(context=truncated_context or "None provided")
+        try:
+            raw = self.client.analyze_images(paths, prompt, system=SYSTEM_PROMPT)
+        except Exception as exc:  # noqa: BLE001
+            if not is_context_overflow_error(exc):
+                raise
+            compact_prompt = COMPACT_MULTI_IMAGE_PROMPT.format(
+                context=truncated_context or "None provided"
+            )
+            try:
+                raw = self.client.analyze_images(paths, compact_prompt, system=None)
+            except Exception as retry_exc:  # noqa: BLE001
+                if is_context_overflow_error(retry_exc):
+                    raise ValueError(
+                        "Vision analysis request exceeded Ollama context size. "
+                        "Increase OLLAMA_NUM_CTX or reduce the amount of context text."
+                    ) from retry_exc
+                raise
         payload = self._extract_json(raw)
         if not payload:
             payload = self._fallback_from_text(raw)

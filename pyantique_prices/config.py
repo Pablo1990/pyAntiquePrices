@@ -17,6 +17,9 @@ class Settings:
     ollama_embed_model: str = field(
         default_factory=lambda: os.getenv("OLLAMA_EMBED_MODEL", "embeddinggemma")
     )
+    ollama_num_ctx: int = field(
+        default_factory=lambda: int(os.getenv("OLLAMA_NUM_CTX", "8192"))
+    )
     database_url: str = field(
         default_factory=lambda: os.getenv(
             "DATABASE_URL", "sqlite:///./data/antiquegpt.db"

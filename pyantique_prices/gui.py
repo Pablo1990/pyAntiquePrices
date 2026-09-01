@@ -204,7 +204,11 @@ class App(tk.Tk):
                     )
                 else:
                     raise
-            client = OllamaClient(host=settings.ollama_host, model=model)
+            client = OllamaClient(
+                host=settings.ollama_host,
+                model=model,
+                num_ctx=settings.ollama_num_ctx,
+            )
             analyzer = MultiImageAnalyzer(client=client, mark_service=MarkAnalysisService())
             pricer = None
             pricing_warning = None

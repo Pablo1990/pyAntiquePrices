@@ -23,7 +23,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     create_tables(engine)
     session_factory = get_session_factory(engine)
 
-    client = OllamaClient(host=settings.ollama_host, model=settings.ollama_vision_model)
+    client = OllamaClient(
+        host=settings.ollama_host,
+        model=settings.ollama_vision_model,
+        num_ctx=settings.ollama_num_ctx,
+    )
     analyzer = MultiImageAnalyzer(client=client)
     pricer = PricePredictor(
         min_comparables_for_model=settings.min_comparables_for_model,
