@@ -19,8 +19,10 @@
 10. [Deep thinking mode](#deep-thinking-mode)
 11. [Batch processing](#batch-processing)
 12. [Troubleshooting](#troubleshooting)
-13. [Development](#development)
-14. [Legal & ethical notes](#legal--ethical-notes)
+13. [REST API (FastAPI)](#rest-api-fastapi)
+14. [Model training workflow](#model-training-workflow)
+15. [Development](#development)
+16. [Legal & ethical notes](#legal--ethical-notes)
 
 ---
 
@@ -115,28 +117,18 @@ The graphical interface opens immediately.
 
 ### Step-by-step
 
-1. **Select an image or folder**  
-   Click **Image…** to pick a single photo, or **Folder…** to select a directory.  
-   Supported formats: JPEG, PNG, WEBP, BMP, TIFF, GIF.
+1. **Select 3–5 photos of one object**  
+   Click **Select photos…** and choose 3 to 5 photos of the same antique from different angles.  
+   Supported formats: JPEG, PNG, WEBP.
 
-2. **Choose the two models**  
-   **Vision model (Pass 1)** is pre-populated with recommended vision models and must support images.  
-   **Reasoning backend (Pass 2)** can be either **Ollama** or **Hugging Face**.  
-   **Reasoning model (Pass 2)** can be the same Ollama model, a text-focused Ollama model, or a Hugging Face base-model repo id.  
-   If you use Hugging Face, you can also provide an optional PEFT adapter such as `jordanmatsumoto/pricing-specialist`.  
-   If you enter a Pass-1 model that is not in the recommended list, a warning dialog will ask you to confirm.
+2. **Set model/currency metadata**  
+   Choose the **vision model** and optional metadata (`currency`, `location`, `known dimensions`, `provenance`, free-text description).
 
-3. **Enable Deep thinking** *(recommended)*  
-   When checked, the model explicitly reasons step-by-step before producing its final answer. This takes longer but is significantly more accurate, especially for ambiguous items.
+3. **Click Analyze object**  
+   The GUI runs multi-image identification, maker-mark analysis, comparable retrieval, and pricing as one object-level appraisal.
 
-4. **Enter extra search keywords** *(optional)*  
-   Keywords are **auto-generated from the image** — the model first identifies the object and produces auction-specialist search terms automatically. If you want to refine the search (e.g. you know the origin or have the maker's name), add extra keywords here and they will be merged with the auto-generated ones.
-
-5. **Add context** *(optional)*  
-   Any extra information you have: provenance, size, markings, origin, family history.
-
-6. **Click Analyse antique**  
-   A progress bar tracks each image. Results appear in the scrollable appraisal panel below.
+4. **Review structured output**  
+   The result panel is grouped into `IDENTIFICATION`, `MARKS`, `COMPARABLE SALES`, `VALUATION`, `CONFIDENCE`, and `WARNINGS`.
 
 ---
 
@@ -326,7 +318,7 @@ When **Deep thinking** is enabled (the default), the model is asked to work thro
 Step 5 now explicitly uses the scraped auction data found in the automatic scraping phase, so the model compares its visual assessment against real market evidence before giving its final price range.
 
 The thinking section is shown in the output so you can review the reasoning.  
-Disable it with `--no-deep-thinking` (CLI) or uncheck the box (GUI) when you need faster results (Pass 1 + scraping still run, only the deep-thinking format changes).
+Disable it with `--no-deep-thinking` in CLI mode when you need faster results.
 
 ---
 
@@ -334,17 +326,26 @@ Disable it with `--no-deep-thinking` (CLI) or uncheck the box (GUI) when you nee
 
 ### GUI
 
-Click **Folder…** to select a directory. The app will find all image files inside and analyse them in order. A progress bar advances after each image. Results are shown with a clear separator:
+The GUI now processes a **single object appraisal per run** using **3–5 photos** of the same item.  
+For multiple objects, run multiple GUI appraisals (one object per set of photos).
 
 ```
-============================================================
-Image 1/5: vase_01.jpg
-============================================================
-1. **Description**: Blue and white porcelain vase...
+IDENTIFICATION
+-------------------------------------------
+Object: ...
+Period: ...
+
+MARKS
+-------------------------------------------
 ...
-============================================================
-Image 2/5: clock_01.jpg
-============================================================
+
+COMPARABLE SALES
+-------------------------------------------
+Candidates: ...
+Usable: ...
+
+VALUATION
+-------------------------------------------
 ...
 ```
 
@@ -357,6 +358,73 @@ pyantique-prices --cli /path/to/images/ --keywords "estate sale" --model minicpm
 ```
 
 Per-image errors are reported to `stderr` without stopping the batch.
+
+---
+
+## REST API (FastAPI)
+
+Run the API server:
+
+```bash
+pip install -e ".[api]"
+uvicorn pyantique_prices.api.app:app --reload
+```
+
+Endpoints:
+
+- `POST /appraise` (multipart, 3-5 images; JPEG/PNG/WebP)
+- `GET /health`
+- `GET /models`
+- `GET /sales/{id}`
+- `GET /appraisals/{id}`
+
+`POST /appraise` optional form fields:
+
+- `currency`
+- `location`
+- `known_dimensions`
+- `user_description`
+- `provenance`
+
+---
+
+## Model training workflow
+
+Import historical sales:
+
+```bash
+python scripts/import_sales.py data/sales.csv
+```
+
+Generate text embeddings for imported sales:
+
+```bash
+python scripts/index_sales.py
+```
+
+Train pricing artifacts:
+
+```bash
+python scripts/train_price_model.py
+```
+
+Evaluate pricing artifacts (time-aware validation/test):
+
+```bash
+python scripts/evaluate_model.py
+```
+
+Expected artifacts:
+
+```text
+models/
+  price_model.pkl
+  quantile_models/
+    p10.pkl p25.pkl p50.pkl p75.pkl p90.pkl
+  calibrator.pkl
+  feature_schema.json
+  metrics.json
+```
 
 ---
 
@@ -422,13 +490,13 @@ ollama pull llava:13b       # ~10 GB
 
 ```bash
 # Install with dev dependencies
-pip install -e ".[dev]"
+python -m pip install -e ".[dev]"
 
 # Run the test suite
-pytest tests/ -v
+python -m pytest -q
 
 # Run a specific test file
-pytest tests/test_analyzer.py -v
+python -m pytest -q tests/test_analyzer.py
 ```
 
 ### Project structure
@@ -438,12 +506,26 @@ pyAntiquePrices/
 ├── pyantique_prices/
 │   ├── __init__.py        # Public API exports
 │   ├── __main__.py        # CLI entry point
-│   ├── analyzer.py        # AntiqueAnalyzer – LLM appraisal logic
-│   ├── scraper.py         # DuckDuckGoScraper, MultiSourceScraper
+│   ├── analyzer.py        # Legacy appraisal flow
+│   ├── scraper.py         # Legacy scraper
+│   ├── api/               # FastAPI app and routes
+│   ├── data/              # SQLAlchemy models/importer
+│   ├── retrieval/         # Comparable retrieval/ranking
+│   ├── pricing/           # Features/model/calibration/training helpers
+│   ├── services/          # Appraisal orchestration
+│   ├── vision/            # Multi-image vision schemas/analyzer/client
 │   └── gui.py             # Tkinter GUI
 ├── tests/
 │   ├── test_analyzer.py
-│   └── test_scraper.py
+│   ├── test_scraper.py
+│   ├── test_api.py
+│   ├── test_pricing.py
+│   └── ...
+├── scripts/
+│   ├── import_sales.py
+│   ├── index_sales.py
+│   ├── train_price_model.py
+│   └── evaluate_model.py
 ├── pyproject.toml
 └── README.md
 ```

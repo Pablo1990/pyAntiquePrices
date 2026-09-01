@@ -1,22 +1,21 @@
-"""Minimal Tkinter GUI for pyAntiquePrices."""
+"""Tkinter GUI for the multi-photo AntiqueGPT workflow."""
 
 from __future__ import annotations
 
-import logging
 import threading
 import tkinter as tk
 from pathlib import Path
 from tkinter import filedialog, messagebox, scrolledtext, ttk
-from typing import Optional
 
-from .analyzer import AntiqueAnalyzer, RECOMMENDED_MODELS
-from .scraper import MultiSourceScraper
+from .config import Settings
+from .services.appraisal import AppraisalService
+from .vision.analyzer import MAX_IMAGES, MIN_IMAGES, SUPPORTED_EXTENSIONS, MultiImageAnalyzer
+from .vision.marks import MarkAnalysisService
+from .vision.ollama import OllamaClient
 
-logger = logging.getLogger(__name__)
-
-_WINDOW_TITLE = "pyAntiquePrices – Antique Appraiser"
-_WINDOW_MIN_W = 820
-_WINDOW_MIN_H = 680
+_WINDOW_TITLE = "AntiqueGPT"
+_WINDOW_MIN_W = 920
+_WINDOW_MIN_H = 720
 _PAD = 8
 
 
@@ -28,321 +27,265 @@ class App(tk.Tk):
         self.title(_WINDOW_TITLE)
         self.minsize(_WINDOW_MIN_W, _WINDOW_MIN_H)
         self.resizable(True, True)
-
-        self._image_path: Optional[Path] = None
-        self._analyzer = AntiqueAnalyzer()
-        self._scraper = MultiSourceScraper()
-
+        self._settings = Settings()
+        self._image_paths: list[Path] = []
         self._build_ui()
 
-    # ------------------------------------------------------------------
-    # UI construction
-    # ------------------------------------------------------------------
-
     def _build_ui(self) -> None:
-        # ---- Top frame: image selector + options ----
-        top = ttk.LabelFrame(self, text="Item details", padding=_PAD)
+        top = ttk.LabelFrame(self, text="Antique object input", padding=_PAD)
         top.pack(fill=tk.X, padx=_PAD, pady=_PAD)
 
-        # Image / folder row
-        img_row = ttk.Frame(top)
-        img_row.pack(fill=tk.X, pady=(0, _PAD))
-        ttk.Label(img_row, text="Image / folder:").pack(side=tk.LEFT)
-        self._img_var = tk.StringVar(value="No file or folder selected")
-        ttk.Entry(img_row, textvariable=self._img_var, state="readonly", width=48).pack(
-            side=tk.LEFT, padx=_PAD
+        image_row = ttk.Frame(top)
+        image_row.pack(fill=tk.X, pady=(0, _PAD))
+        ttk.Label(image_row, text=f"Photos ({MIN_IMAGES}-{MAX_IMAGES}):").pack(side=tk.LEFT)
+        self._img_var = tk.StringVar(value="No photos selected")
+        ttk.Entry(image_row, textvariable=self._img_var, state="readonly", width=72).pack(
+            side=tk.LEFT,
+            padx=_PAD,
         )
-        ttk.Button(img_row, text="Image…", command=self._browse_image).pack(side=tk.LEFT)
-        ttk.Button(img_row, text="Folder…", command=self._browse_folder).pack(
-            side=tk.LEFT, padx=(4, 0)
+        ttk.Button(image_row, text="Select photos…", command=self._browse_images).pack(
+            side=tk.LEFT
+        )
+        ttk.Button(image_row, text="Clear", command=self._clear_images).pack(
+            side=tk.LEFT,
+            padx=(4, 0),
         )
 
-        # Model row – combobox with recommended models + free-text
         model_row = ttk.Frame(top)
         model_row.pack(fill=tk.X, pady=(0, _PAD))
-        ttk.Label(model_row, text="Vision model (Pass 1):").pack(side=tk.LEFT)
-        self._model_var = tk.StringVar(value=RECOMMENDED_MODELS[0])
-        model_cb = ttk.Combobox(
-            model_row,
-            textvariable=self._model_var,
-            values=RECOMMENDED_MODELS,
-            width=28,
+        ttk.Label(model_row, text="Vision model:").pack(side=tk.LEFT)
+        self._model_var = tk.StringVar(value=self._settings.ollama_vision_model)
+        ttk.Entry(model_row, textvariable=self._model_var, width=28).pack(
+            side=tk.LEFT,
+            padx=_PAD,
         )
-        model_cb.pack(side=tk.LEFT, padx=_PAD)
-        ttk.Label(
-            model_row,
-            text="(must support vision)",
-            foreground="grey",
-        ).pack(side=tk.LEFT)
-
-        reasoner_row = ttk.Frame(top)
-        reasoner_row.pack(fill=tk.X, pady=(0, _PAD))
-        ttk.Label(reasoner_row, text="Reasoning backend (Pass 2):").pack(side=tk.LEFT)
-        self._reasoning_backend_var = tk.StringVar(value="ollama")
-        ttk.Combobox(
-            reasoner_row,
-            textvariable=self._reasoning_backend_var,
-            values=("ollama", "huggingface"),
-            width=14,
-            state="readonly",
-        ).pack(side=tk.LEFT, padx=_PAD)
-        ttk.Label(reasoner_row, text="Model:").pack(side=tk.LEFT)
-        self._reasoning_model_var = tk.StringVar(value=RECOMMENDED_MODELS[0])
-        ttk.Combobox(
-            reasoner_row,
-            textvariable=self._reasoning_model_var,
-            values=RECOMMENDED_MODELS,
-            width=28,
-        ).pack(side=tk.LEFT, padx=_PAD)
-        ttk.Label(
-            reasoner_row,
-            text="(Ollama name or Hugging Face base-model repo id)",
-            foreground="grey",
-        ).pack(side=tk.LEFT)
-
-        adapter_row = ttk.Frame(top)
-        adapter_row.pack(fill=tk.X, pady=(0, _PAD))
-        ttk.Label(adapter_row, text="PEFT adapter (optional):").pack(side=tk.LEFT)
-        self._reasoning_adapter_var = tk.StringVar()
-        ttk.Entry(adapter_row, textvariable=self._reasoning_adapter_var, width=48).pack(
-            side=tk.LEFT, padx=_PAD
+        ttk.Label(model_row, text="Currency:").pack(side=tk.LEFT)
+        self._currency_var = tk.StringVar(value=self._settings.base_currency)
+        ttk.Entry(model_row, textvariable=self._currency_var, width=8).pack(
+            side=tk.LEFT,
+            padx=(4, _PAD),
         )
-        ttk.Label(
-            adapter_row,
-            text="Use with Hugging Face, e.g. jordanmatsumoto/pricing-specialist",
-            foreground="grey",
-        ).pack(side=tk.LEFT)
-
-        # Options row: deep thinking checkbox
-        opts_row = ttk.Frame(top)
-        opts_row.pack(fill=tk.X, pady=(0, _PAD))
-        self._deep_thinking_var = tk.BooleanVar(value=True)
-        ttk.Checkbutton(
-            opts_row,
-            text="Deep thinking  (chain-of-thought reasoning – slower but more accurate)",
-            variable=self._deep_thinking_var,
-        ).pack(side=tk.LEFT)
-
-        # Search keywords row
-        kw_row = ttk.Frame(top)
-        kw_row.pack(fill=tk.X, pady=(0, _PAD))
-        ttk.Label(kw_row, text="Extra search keywords (optional):").pack(side=tk.LEFT)
-        self._keywords_var = tk.StringVar()
-        ttk.Entry(kw_row, textvariable=self._keywords_var, width=48).pack(
-            side=tk.LEFT, padx=_PAD
+        ttk.Label(model_row, text="Location:").pack(side=tk.LEFT)
+        self._location_var = tk.StringVar()
+        ttk.Entry(model_row, textvariable=self._location_var, width=20).pack(
+            side=tk.LEFT,
+            padx=(4, 0),
         )
-        ttk.Label(
-            kw_row,
-            text="Keywords are auto-generated from the image; add extras here if needed",
-            foreground="grey",
-        ).pack(side=tk.LEFT)
 
-        # Context area
-        ttk.Label(top, text="Additional context / description:").pack(anchor=tk.W)
+        dim_row = ttk.Frame(top)
+        dim_row.pack(fill=tk.X, pady=(0, _PAD))
+        ttk.Label(dim_row, text="Known dimensions:").pack(side=tk.LEFT)
+        self._dimensions_var = tk.StringVar()
+        ttk.Entry(dim_row, textvariable=self._dimensions_var, width=40).pack(
+            side=tk.LEFT,
+            padx=_PAD,
+        )
+        ttk.Label(dim_row, text="Provenance:").pack(side=tk.LEFT)
+        self._provenance_var = tk.StringVar()
+        ttk.Entry(dim_row, textvariable=self._provenance_var, width=30).pack(
+            side=tk.LEFT,
+            padx=(4, 0),
+        )
+
+        ttk.Label(top, text="Description / context:").pack(anchor=tk.W)
         self._context_text = scrolledtext.ScrolledText(top, height=4, wrap=tk.WORD)
         self._context_text.pack(fill=tk.X, pady=(2, 0))
 
-        # ---- Action button ----
         btn_frame = ttk.Frame(self)
         btn_frame.pack(fill=tk.X, padx=_PAD)
         self._analyse_btn = ttk.Button(
             btn_frame,
-            text="Analyse antique",
+            text="Analyze object",
             command=self._start_analysis,
         )
         self._analyse_btn.pack(side=tk.LEFT)
         self._status_var = tk.StringVar(value="Ready.")
         ttk.Label(btn_frame, textvariable=self._status_var, foreground="grey").pack(
-            side=tk.LEFT, padx=_PAD
+            side=tk.LEFT,
+            padx=_PAD,
         )
 
-        # ---- Progress bar ----
-        self._progress = ttk.Progressbar(self, mode="determinate")
+        self._progress = ttk.Progressbar(self, mode="indeterminate")
         self._progress.pack(fill=tk.X, padx=_PAD, pady=(2, 0))
 
-        # ---- Result area ----
         result_frame = ttk.LabelFrame(self, text="Appraisal", padding=_PAD)
         result_frame.pack(fill=tk.BOTH, expand=True, padx=_PAD, pady=_PAD)
         self._result_text = scrolledtext.ScrolledText(
-            result_frame, wrap=tk.WORD, state=tk.DISABLED
+            result_frame,
+            wrap=tk.WORD,
+            state=tk.DISABLED,
         )
         self._result_text.pack(fill=tk.BOTH, expand=True)
 
-    # ------------------------------------------------------------------
-    # Event handlers
-    # ------------------------------------------------------------------
-
-    def _browse_image(self) -> None:
-        path = filedialog.askopenfilename(
-            title="Select antique image",
-            filetypes=[
-                ("Image files", "*.jpg *.jpeg *.png *.webp *.bmp *.tiff *.gif"),
-                ("All files", "*.*"),
-            ],
+    def _browse_images(self) -> None:
+        paths = filedialog.askopenfilenames(
+            title=f"Select {MIN_IMAGES}-{MAX_IMAGES} antique photos",
+            filetypes=[("Image files", "*.jpg *.jpeg *.png *.webp"), ("All files", "*.*")],
         )
-        if path:
-            self._image_path = Path(path)
-            self._img_var.set(str(self._image_path))
+        if not paths:
+            return
+        selected = [Path(path) for path in paths]
+        self._image_paths = selected
+        label = ", ".join(path.name for path in selected[:3])
+        if len(selected) > 3:
+            label = f"{label}, … ({len(selected)} selected)"
+        self._img_var.set(label)
 
-    def _browse_folder(self) -> None:
-        path = filedialog.askdirectory(title="Select folder with antique images")
-        if path:
-            self._image_path = Path(path)
-            self._img_var.set(str(self._image_path))
+    def _clear_images(self) -> None:
+        self._image_paths = []
+        self._img_var.set("No photos selected")
 
     def _start_analysis(self) -> None:
-        if self._image_path is None:
-            messagebox.showwarning("No selection", "Please select an image or folder first.")
-            return
-
-        if not self._image_path.exists():
-            messagebox.showerror("Not found", f"Cannot find:\n{self._image_path}")
-            return
-
-        model = self._model_var.get().strip()
-        if not model:
-            messagebox.showwarning("No model", "Please enter an Ollama model name.")
-            return
-        reasoning_model = self._reasoning_model_var.get().strip()
-        if not reasoning_model:
-            messagebox.showwarning("No reasoning model", "Please enter a Pass 2 reasoning model name.")
-            return
-        reasoning_backend = self._reasoning_backend_var.get().strip() or "ollama"
-        reasoning_adapter = self._reasoning_adapter_var.get().strip() or None
-        if (reasoning_backend == "huggingface" or reasoning_adapter) and not reasoning_model:
+        if len(self._image_paths) < MIN_IMAGES or len(self._image_paths) > MAX_IMAGES:
             messagebox.showwarning(
-                "Missing reasoning model",
-                "Please enter a Hugging Face base model repo id for Pass 2.",
+                "Invalid photo count",
+                f"Please select between {MIN_IMAGES} and {MAX_IMAGES} photos.",
             )
             return
 
-        # Warn if the selected model is not in the recommended vision list
-        if model not in RECOMMENDED_MODELS:
-            proceed = messagebox.askyesno(
-                "Vision support warning",
-                f"'{model}' is not in the list of known vision-capable models.\n\n"
-                f"This tool requires a model that can process images. "
-                f"If '{model}' does not support vision, the analysis will fail.\n\n"
-                f"Recommended models: {', '.join(RECOMMENDED_MODELS)}\n\n"
-                "Continue anyway?",
-            )
-            if not proceed:
+        for path in self._image_paths:
+            if not path.exists():
+                messagebox.showerror("Not found", f"Cannot find:\n{path}")
+                return
+            if path.suffix.lower() not in SUPPORTED_EXTENSIONS:
+                messagebox.showwarning(
+                    "Unsupported format",
+                    "Supported formats: JPEG, PNG, WebP.",
+                )
                 return
 
-        try:
-            images = AntiqueAnalyzer.collect_images(self._image_path)
-        except FileNotFoundError as exc:
-            messagebox.showerror("Error", str(exc))
-            return
-
-        if not images:
-            messagebox.showwarning("No images", "No image files found in the selected folder.")
-            return
-
-        # Capture all Tkinter values on the main thread before handing to worker
+        model = self._model_var.get().strip() or self._settings.ollama_vision_model
+        currency = (self._currency_var.get().strip() or self._settings.base_currency).upper()
         context = self._context_text.get("1.0", tk.END).strip()
-        keywords = self._keywords_var.get().strip()
-        deep_thinking = self._deep_thinking_var.get()
+        location = self._location_var.get().strip()
+        dimensions = self._dimensions_var.get().strip()
+        provenance = self._provenance_var.get().strip()
 
         self._analyse_btn.config(state=tk.DISABLED)
-        self._progress["value"] = 0
-        self._progress["maximum"] = len(images)
-        self._set_status(f"Starting analysis of {len(images)} image(s)…")
+        self._progress.start(8)
+        self._set_status("Analyzing antique object…")
         self._set_result("")
 
         thread = threading.Thread(
             target=self._run_analysis,
-            args=(
-                images,
-                model,
-                reasoning_model,
-                reasoning_backend,
-                reasoning_adapter,
-                context,
-                keywords,
-                deep_thinking,
-            ),
+            args=(list(self._image_paths), model, currency, context, location, dimensions, provenance),
             daemon=True,
         )
         thread.start()
 
     def _run_analysis(
         self,
-        images: list[Path],
+        image_paths: list[Path],
         model: str,
-        reasoning_model: str,
-        reasoning_backend: str,
-        reasoning_adapter: str | None,
+        currency: str,
         context: str,
-        keywords: str,
-        deep_thinking: bool,
+        location: str,
+        dimensions: str,
+        provenance: str,
     ) -> None:
-        """Background worker – must not touch Tk widgets directly."""
-        self._analyzer.model = model
-        self._analyzer.reasoning_model = reasoning_model
-        self._analyzer.reasoning_backend = reasoning_backend
-        self._analyzer.reasoning_adapter = reasoning_adapter
-        self._analyzer.deep_thinking = deep_thinking
-        self._analyzer.on_pull_progress = self._on_pull_progress
-
-        total = len(images)
-        all_results: list[str] = []
-
-        for idx, img_path in enumerate(images, 1):
-            mode = "deep thinking" if deep_thinking else "standard"
-            self._after_safe(
-                self._set_status,
-                f"[{mode}] Analysing image {idx}/{total}: {img_path.name}…",
-            )
+        try:
+            settings = Settings()
+            session_factory = None
+            save_appraisal_fn = None
+            db_warning = None
             try:
-                result = self._analyzer.analyse(
-                    img_path,
-                    context=context,
-                    extra_keywords=keywords,
-                    scraper=self._scraper,
-                )
-                all_results.append(
-                    f"{'='*60}\n"
-                    f"Image {idx}/{total}: {img_path.name}\n"
-                    f"{'='*60}\n"
-                    f"{result}\n"
-                )
-            except Exception as exc:  # noqa: BLE001
-                all_results.append(
-                    f"{'='*60}\n"
-                    f"Image {idx}/{total}: {img_path.name}  [ERROR]\n"
-                    f"{'='*60}\n"
-                    f"{exc}\n"
-                )
-            self._after_safe(self._set_progress, idx)
+                from .data.appraisals import save_appraisal as _save_appraisal
+                from .data.database import create_tables, get_engine, get_session_factory
 
-        self._after_safe(self._on_analysis_done, "\n".join(all_results))
+                engine = get_engine(settings.database_url)
+                create_tables(engine)
+                session_factory = get_session_factory(engine)
+                save_appraisal_fn = _save_appraisal
+            except ModuleNotFoundError as exc:
+                if exc.name == "sqlalchemy":
+                    db_warning = (
+                        "SQLAlchemy is not installed; running without local sales "
+                        "database, comparable retrieval, and appraisal persistence."
+                    )
+                else:
+                    raise
+            client = OllamaClient(host=settings.ollama_host, model=model)
+            analyzer = MultiImageAnalyzer(client=client, mark_service=MarkAnalysisService())
+            pricer = None
+            pricing_warning = None
+            try:
+                from .pricing.model import PricePredictor
+
+                pricer = PricePredictor(
+                    min_comparables_for_model=settings.min_comparables_for_model,
+                    min_comparables_for_confidence=settings.min_comparables_for_confidence,
+                )
+            except ModuleNotFoundError as exc:
+                if exc.name == "numpy":
+                    pricing_warning = (
+                        "NumPy is not installed; running without numerical pricing model."
+                    )
+                else:
+                    raise
+            service = AppraisalService(
+                analyzer=analyzer,
+                retrieval_session_factory=session_factory,
+                pricer=pricer,
+                base_currency=settings.base_currency,
+                min_comparables_for_model=settings.min_comparables_for_model,
+                min_comparables_for_confidence=settings.min_comparables_for_confidence,
+                top_k_comparables=settings.top_k_comparables,
+                min_similarity=settings.min_similarity,
+                max_sale_age_years=settings.max_sale_age_years,
+                min_data_quality_score=settings.min_data_quality_score,
+            )
+            full_context = _build_context(
+                context=context,
+                location=location,
+                known_dimensions=dimensions,
+                provenance=provenance,
+            )
+            result = service.appraise(image_paths, context=full_context, currency=currency)
+            if db_warning:
+                result.setdefault("warnings", []).append(db_warning)
+            if pricing_warning:
+                result.setdefault("warnings", []).append(pricing_warning)
+
+            if session_factory and save_appraisal_fn:
+                with session_factory() as session:
+                    save_appraisal_fn(
+                        session=session,
+                        result=result,
+                        input_metadata={
+                            "currency": currency,
+                            "location": location or None,
+                            "known_dimensions": dimensions or None,
+                            "provenance": provenance or None,
+                            "user_description": context or None,
+                            "num_images": len(image_paths),
+                            "source_images": [str(path) for path in image_paths],
+                        },
+                        model_versions={
+                            "vision_model": model,
+                            "pricing_model": _pricing_model_name(result),
+                        },
+                    )
+
+            formatted = _format_appraisal(result)
+            self._after_safe(self._on_analysis_done, formatted)
+        except Exception as exc:  # noqa: BLE001
+            self._after_safe(self._on_analysis_error, str(exc))
 
     def _on_analysis_done(self, result: str) -> None:
+        self._progress.stop()
         self._set_result(result)
         self._set_status("Analysis complete.")
         self._analyse_btn.config(state=tk.NORMAL)
 
     def _on_analysis_error(self, message: str) -> None:
+        self._progress.stop()
         self._set_result(f"Error:\n{message}")
         self._set_status("Analysis failed.")
-        self._progress["value"] = 0
         self._analyse_btn.config(state=tk.NORMAL)
         messagebox.showerror("Analysis error", message)
 
-    def _on_pull_progress(self, status: str) -> None:
-        """Called from the background thread to relay download progress to the GUI."""
-        self._after_safe(self._set_status, f"Downloading model: {status}")
-
-    # ------------------------------------------------------------------
-    # Helpers
-    # ------------------------------------------------------------------
-
     def _set_status(self, text: str) -> None:
         self._status_var.set(text)
-
-    def _set_progress(self, value: int) -> None:
-        self._progress["value"] = value
 
     def _set_result(self, text: str) -> None:
         self._result_text.config(state=tk.NORMAL)
@@ -351,11 +294,130 @@ class App(tk.Tk):
         self._result_text.config(state=tk.DISABLED)
 
     def _after_safe(self, func, *args) -> None:
-        """Schedule *func* on the Tk main thread."""
         self.after(0, func, *args)
 
 
+def _build_context(
+    *,
+    context: str,
+    location: str,
+    known_dimensions: str,
+    provenance: str,
+) -> str:
+    parts = []
+    if context:
+        parts.append(f"Description: {context}")
+    if location:
+        parts.append(f"Location: {location}")
+    if known_dimensions:
+        parts.append(f"Known dimensions: {known_dimensions}")
+    if provenance:
+        parts.append(f"Provenance: {provenance}")
+    return "\n".join(parts)
+
+
+def _extract_value(field):
+    if isinstance(field, dict):
+        return field.get("value")
+    return field
+
+
+def _pricing_model_name(result: dict) -> str:
+    valuation = result.get("valuation") or {}
+    if isinstance(valuation, dict):
+        return valuation.get("method", "unknown")
+    return "unknown"
+
+
+def _format_appraisal(result: dict) -> str:
+    identification = result.get("identification") or {}
+    valuation = result.get("valuation") or {}
+    marks = identification.get("marks") or []
+    manufacturer_candidates = identification.get("manufacturer_candidates") or []
+    manufacturers = ", ".join(
+        candidate.get("name", "")
+        for candidate in manufacturer_candidates
+        if isinstance(candidate, dict) and candidate.get("name")
+    ) or "N/A"
+
+    lines = []
+    lines.append("IDENTIFICATION")
+    lines.append("-" * 43)
+    lines.append(f"Object: {_extract_value(identification.get('object_type')) or 'N/A'}")
+    lines.append(f"Period: {_extract_value(identification.get('likely_period')) or 'N/A'}")
+    lines.append(f"Manufacturer candidates: {manufacturers}")
+    lines.append(
+        f"Materials: {', '.join(identification.get('materials', [])) or 'N/A'}"
+    )
+    lines.append(f"Condition: {_extract_value(identification.get('condition')) or 'N/A'}")
+    lines.append("")
+
+    lines.append("MARKS")
+    lines.append("-" * 43)
+    if marks:
+        for mark in marks:
+            lines.append(
+                f"- {mark.get('text') or 'N/A'} | type={mark.get('mark_type') or 'N/A'} | "
+                f"confidence={mark.get('confidence', 0.0):.2f} | "
+                f"candidates={', '.join(mark.get('manufacturer_candidates', [])) or 'N/A'}"
+            )
+    else:
+        lines.append("No marks detected.")
+    lines.append("")
+
+    lines.append("COMPARABLE SALES")
+    lines.append("-" * 43)
+    lines.append(
+        f"Candidates: {result.get('candidate_count', 0)} | "
+        f"Usable: {result.get('usable_comparable_count', 0)}"
+    )
+    comparables = result.get("comparables", [])
+    for comparable in comparables[:10]:
+        lines.append(
+            f"- {comparable.get('title') or 'Untitled'} | "
+            f"{comparable.get('normalized_price')} {result.get('currency', 'EUR')} | "
+            f"score={comparable.get('retrieval_score', 0.0):.3f}"
+        )
+    lines.append("")
+
+    lines.append("VALUATION")
+    lines.append("-" * 43)
+    if valuation and result.get("valuation_available"):
+        lines.append(
+            f"Estimated market value: {result.get('currency', 'EUR')} "
+            f"{valuation.get('low')} – {valuation.get('high')}"
+        )
+        lines.append(f"Midpoint (P50): {valuation.get('mid')}")
+    elif valuation:
+        lines.append(
+            f"Reference-only estimate: {result.get('currency', 'EUR')} "
+            f"{valuation.get('low')} – {valuation.get('high')}"
+        )
+    else:
+        lines.append("No valuation available.")
+    lines.append("")
+
+    lines.append("CONFIDENCE")
+    lines.append("-" * 43)
+    lines.append(
+        f"Identification confidence: {result.get('identification_confidence', 0.0) * 100:.0f}%"
+    )
+    lines.append(
+        f"Valuation confidence: {result.get('valuation_confidence', 0.0) * 100:.0f}%"
+    )
+    lines.append("")
+
+    lines.append("WARNINGS")
+    lines.append("-" * 43)
+    warnings = result.get("warnings", [])
+    if warnings:
+        for warning in warnings:
+            lines.append(f"- {warning}")
+    else:
+        lines.append("None.")
+    return "\n".join(lines)
+
+
 def run_gui() -> None:
-    """Launch the GUI application."""
     app = App()
     app.mainloop()
