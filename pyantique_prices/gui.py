@@ -8,8 +8,6 @@ from pathlib import Path
 from tkinter import filedialog, messagebox, scrolledtext, ttk
 
 from .config import Settings
-from .data.appraisals import save_appraisal
-from .data.database import create_tables, get_engine, get_session_factory
 from .pricing.model import PricePredictor
 from .services.appraisal import AppraisalService
 from .vision.analyzer import MAX_IMAGES, MIN_IMAGES, SUPPORTED_EXTENSIONS, MultiImageAnalyzer
@@ -188,9 +186,25 @@ class App(tk.Tk):
     ) -> None:
         try:
             settings = Settings()
-            engine = get_engine(settings.database_url)
-            create_tables(engine)
-            session_factory = get_session_factory(engine)
+            session_factory = None
+            save_appraisal_fn = None
+            db_warning = None
+            try:
+                from .data.appraisals import save_appraisal as _save_appraisal
+                from .data.database import create_tables, get_engine, get_session_factory
+
+                engine = get_engine(settings.database_url)
+                create_tables(engine)
+                session_factory = get_session_factory(engine)
+                save_appraisal_fn = _save_appraisal
+            except ModuleNotFoundError as exc:
+                if exc.name == "sqlalchemy":
+                    db_warning = (
+                        "SQLAlchemy is not installed; running without local sales "
+                        "database, comparable retrieval, and appraisal persistence."
+                    )
+                else:
+                    raise
             client = OllamaClient(host=settings.ollama_host, model=model)
             analyzer = MultiImageAnalyzer(client=client, mark_service=MarkAnalysisService())
             pricer = PricePredictor(
@@ -216,25 +230,28 @@ class App(tk.Tk):
                 provenance=provenance,
             )
             result = service.appraise(image_paths, context=full_context, currency=currency)
+            if db_warning:
+                result.setdefault("warnings", []).append(db_warning)
 
-            with session_factory() as session:
-                save_appraisal(
-                    session=session,
-                    result=result,
-                    input_metadata={
-                        "currency": currency,
-                        "location": location or None,
-                        "known_dimensions": dimensions or None,
-                        "provenance": provenance or None,
-                        "user_description": context or None,
-                        "num_images": len(image_paths),
-                        "source_images": [str(path) for path in image_paths],
-                    },
-                    model_versions={
-                        "vision_model": model,
-                        "pricing_model": result.get("valuation", {}).get("method", "unknown"),
-                    },
-                )
+            if session_factory and save_appraisal_fn:
+                with session_factory() as session:
+                    save_appraisal_fn(
+                        session=session,
+                        result=result,
+                        input_metadata={
+                            "currency": currency,
+                            "location": location or None,
+                            "known_dimensions": dimensions or None,
+                            "provenance": provenance or None,
+                            "user_description": context or None,
+                            "num_images": len(image_paths),
+                            "source_images": [str(path) for path in image_paths],
+                        },
+                        model_versions={
+                            "vision_model": model,
+                            "pricing_model": result.get("valuation", {}).get("method", "unknown"),
+                        },
+                    )
 
             formatted = _format_appraisal(result)
             self._after_safe(self._on_analysis_done, formatted)
