@@ -262,7 +262,7 @@ class App(tk.Tk):
                         },
                         model_versions={
                             "vision_model": model,
-                            "pricing_model": result.get("valuation", {}).get("method", "unknown"),
+                            "pricing_model": _pricing_model_name(result),
                         },
                     )
 
@@ -320,6 +320,13 @@ def _extract_value(field):
     if isinstance(field, dict):
         return field.get("value")
     return field
+
+
+def _pricing_model_name(result: dict) -> str:
+    valuation = result.get("valuation") or {}
+    if isinstance(valuation, dict):
+        return valuation.get("method", "unknown")
+    return "unknown"
 
 
 def _format_appraisal(result: dict) -> str:
