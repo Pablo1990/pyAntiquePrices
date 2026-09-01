@@ -17,13 +17,19 @@ class AppraisalService:
         self,
         analyzer=None,
         retrieval_session=None,
+        retrieval_session_factory=None,
         pricer=None,
         base_currency: str = "EUR",
+        min_comparables_for_model: int = 6,
+        min_comparables_for_confidence: int = 10,
     ) -> None:
         self.analyzer = analyzer
         self.retrieval_session = retrieval_session
+        self.retrieval_session_factory = retrieval_session_factory
         self.pricer = pricer
         self.base_currency = base_currency
+        self.min_comparables_for_model = min_comparables_for_model
+        self.min_comparables_for_confidence = min_comparables_for_confidence
 
     def appraise(
         self,
@@ -57,14 +63,23 @@ class AppraisalService:
         else:
             result["warnings"].append("No vision analyzer configured.")
 
-        if self.retrieval_session and result.get("identification"):
+        if (self.retrieval_session or self.retrieval_session_factory) and result.get(
+            "identification"
+        ):
             try:
                 from pyantique_prices.retrieval.comparables import retrieve_comparables
 
-                comparables = retrieve_comparables(
-                    self.retrieval_session,
-                    result["identification"],
-                )
+                if self.retrieval_session_factory:
+                    with self.retrieval_session_factory() as session:
+                        comparables = retrieve_comparables(
+                            session,
+                            result["identification"],
+                        )
+                else:
+                    comparables = retrieve_comparables(
+                        self.retrieval_session,
+                        result["identification"],
+                    )
                 result["comparables"] = comparables
             except Exception as exc:  # noqa: BLE001
                 logger.warning("Comparable retrieval failed: %s", exc)
@@ -75,9 +90,6 @@ class AppraisalService:
             result["warnings"].append(
                 "No comparable sales found. Cannot estimate price."
             )
-        elif n_comparables < 3:
-            result["warnings"].append("Very few comparables (1-2). Estimate unreliable.")
-            result["valuation_available"] = False
         else:
             if self.pricer and result["identification"]:
                 try:
@@ -94,6 +106,18 @@ class AppraisalService:
                             "valuation_available",
                             False,
                         )
+                        if n_comparables < 3:
+                            result["warnings"].append(
+                                "Very few comparables (1-2). Reference estimate only."
+                            )
+                        elif n_comparables < self.min_comparables_for_model:
+                            result["warnings"].append(
+                                "Limited comparables (3-5). Wide estimate."
+                            )
+                        elif n_comparables < self.min_comparables_for_confidence:
+                            result["warnings"].append(
+                                "Usable but uncertain comparables (6-9)."
+                            )
                 except Exception as exc:  # noqa: BLE001
                     logger.error("Pricing failed: %s", exc)
                     result["warnings"].append(f"Pricing failed: {exc}")

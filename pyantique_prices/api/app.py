@@ -25,11 +25,17 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     client = OllamaClient(host=settings.ollama_host, model=settings.ollama_vision_model)
     analyzer = MultiImageAnalyzer(client=client)
+    pricer = PricePredictor(
+        min_comparables_for_model=settings.min_comparables_for_model,
+        min_comparables_for_confidence=settings.min_comparables_for_confidence,
+    )
     service = AppraisalService(
         analyzer=analyzer,
-        retrieval_session=session_factory(),
-        pricer=PricePredictor(),
+        retrieval_session_factory=session_factory,
+        pricer=pricer,
         base_currency=settings.base_currency,
+        min_comparables_for_model=settings.min_comparables_for_model,
+        min_comparables_for_confidence=settings.min_comparables_for_confidence,
     )
 
     app = FastAPI(title="AntiqueGPT API")

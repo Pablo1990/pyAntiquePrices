@@ -43,7 +43,18 @@ def test_price_predictor_returns_quantile_estimate():
     assert result is not None
     assert result["mid"] == 250.0
     assert result["valuation_available"] is True
+    assert result["method"] == "quantile_estimate"
     assert result["confidence_note"] == "Low confidence: 3-5 comparable sales."
+
+
+def test_price_predictor_uses_reference_only_for_1_to_2_comparables():
+    predictor = PricePredictor()
+    result = predictor.predict({}, [{"normalized_price": 100.0}, {"normalized_price": 120.0}])
+
+    assert result is not None
+    assert result["valuation_available"] is False
+    assert result["method"] == "reference_only"
+    assert result["confidence_note"] == "Very low confidence: only 1-2 comparable sales."
 
 
 def test_quantiles_and_metrics():
