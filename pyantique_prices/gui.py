@@ -8,7 +8,6 @@ from pathlib import Path
 from tkinter import filedialog, messagebox, scrolledtext, ttk
 
 from .config import Settings
-from .pricing.model import PricePredictor
 from .services.appraisal import AppraisalService
 from .vision.analyzer import MAX_IMAGES, MIN_IMAGES, SUPPORTED_EXTENSIONS, MultiImageAnalyzer
 from .vision.marks import MarkAnalysisService
@@ -207,10 +206,22 @@ class App(tk.Tk):
                     raise
             client = OllamaClient(host=settings.ollama_host, model=model)
             analyzer = MultiImageAnalyzer(client=client, mark_service=MarkAnalysisService())
-            pricer = PricePredictor(
-                min_comparables_for_model=settings.min_comparables_for_model,
-                min_comparables_for_confidence=settings.min_comparables_for_confidence,
-            )
+            pricer = None
+            pricing_warning = None
+            try:
+                from .pricing.model import PricePredictor
+
+                pricer = PricePredictor(
+                    min_comparables_for_model=settings.min_comparables_for_model,
+                    min_comparables_for_confidence=settings.min_comparables_for_confidence,
+                )
+            except ModuleNotFoundError as exc:
+                if exc.name == "numpy":
+                    pricing_warning = (
+                        "NumPy is not installed; running without numerical pricing model."
+                    )
+                else:
+                    raise
             service = AppraisalService(
                 analyzer=analyzer,
                 retrieval_session_factory=session_factory,
@@ -232,6 +243,8 @@ class App(tk.Tk):
             result = service.appraise(image_paths, context=full_context, currency=currency)
             if db_warning:
                 result.setdefault("warnings", []).append(db_warning)
+            if pricing_warning:
+                result.setdefault("warnings", []).append(pricing_warning)
 
             if session_factory and save_appraisal_fn:
                 with session_factory() as session:
