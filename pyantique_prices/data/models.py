@@ -65,3 +65,24 @@ class HistoricalSale(Base):
         default=datetime.datetime.utcnow,
         onupdate=datetime.datetime.utcnow,
     )
+
+
+class AppraisalRecord(Base):
+    __tablename__ = "appraisals"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    request_id = Column(String(64), unique=True, nullable=False, index=True)
+    model_versions = Column(JSON)
+    input_metadata = Column(JSON)
+    identification = Column(JSON)
+    comparable_ids = Column(JSON)
+    valuation = Column(JSON)
+    calibration = Column(JSON)
+    confidence = Column(JSON)
+    warnings = Column(JSON)
+    created_at = Column(DateTime, default=datetime.datetime.utcnow)
+    updated_at = Column(
+        DateTime,
+        default=datetime.datetime.utcnow,
+        onupdate=datetime.datetime.utcnow,
+    )
