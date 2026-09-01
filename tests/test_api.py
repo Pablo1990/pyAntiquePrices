@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from fastapi.testclient import TestClient
+from sqlalchemy.exc import OperationalError
 
 from pyantique_prices.api.app import create_app
 from pyantique_prices.config import Settings
@@ -107,3 +108,29 @@ def test_get_sale_by_id(tmp_path):
     response = client.get(f"/sales/{sale_id}")
     assert response.status_code == 200
     assert response.json()["title"] == "French clock"
+
+
+def test_appraise_returns_warning_when_persistence_fails(tmp_path, monkeypatch):
+    client, _ = _make_client(tmp_path)
+
+    def _readonly(*args, **kwargs):  # noqa: ARG001
+        raise AssertionError("should not be called")
+
+    def _fake_persist(**kwargs):  # noqa: ARG001
+        exc = OperationalError("INSERT INTO appraisals ...", {}, Exception("attempt to write a readonly database"))
+        from pyantique_prices.data.appraisals import _build_persistence_warning
+
+        return None, _build_persistence_warning(exc)
+
+    monkeypatch.setattr("pyantique_prices.api.appraisals.persist_appraisal", _fake_persist)
+
+    files = [
+        ("images", ("img1.jpg", b"a", "image/jpeg")),
+        ("images", ("img2.png", b"b", "image/png")),
+        ("images", ("img3.webp", b"c", "image/webp")),
+    ]
+    response = client.post("/appraise", files=files)
+
+    assert response.status_code == 200
+    warnings = response.json()["warnings"]
+    assert any("database is read-only" in warning for warning in warnings)
