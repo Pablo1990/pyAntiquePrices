@@ -42,4 +42,6 @@ def test_appraisal_service_uses_reference_estimate_for_1_to_2_comparables():
     assert result["valuation"] is not None
     assert result["valuation"]["method"] == "reference_only"
     assert result["valuation_available"] is False
+    assert result["candidate_count"] == 1
+    assert result["usable_comparable_count"] == 1
     assert "Reference estimate only." in " ".join(result["warnings"])

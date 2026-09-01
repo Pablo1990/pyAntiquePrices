@@ -20,3 +20,5 @@ class AppraiseResponse(BaseModel):
     model_version: dict[str, str] = Field(default_factory=dict)
     valuation_available: bool = False
     currency: str = "EUR"
+    candidate_count: int = 0
+    usable_comparable_count: int = 0

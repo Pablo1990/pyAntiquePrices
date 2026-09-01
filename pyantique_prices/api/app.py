@@ -36,6 +36,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         base_currency=settings.base_currency,
         min_comparables_for_model=settings.min_comparables_for_model,
         min_comparables_for_confidence=settings.min_comparables_for_confidence,
+        top_k_comparables=settings.top_k_comparables,
+        min_similarity=settings.min_similarity,
+        max_sale_age_years=settings.max_sale_age_years,
+        min_data_quality_score=settings.min_data_quality_score,
     )
 
     app = FastAPI(title="AntiqueGPT API")

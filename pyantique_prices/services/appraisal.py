@@ -22,6 +22,10 @@ class AppraisalService:
         base_currency: str = "EUR",
         min_comparables_for_model: int = 6,
         min_comparables_for_confidence: int = 10,
+        top_k_comparables: int = 50,
+        min_similarity: float = 0.05,
+        max_sale_age_years: int = 80,
+        min_data_quality_score: float = 0.4,
     ) -> None:
         self.analyzer = analyzer
         self.retrieval_session = retrieval_session
@@ -30,6 +34,10 @@ class AppraisalService:
         self.base_currency = base_currency
         self.min_comparables_for_model = min_comparables_for_model
         self.min_comparables_for_confidence = min_comparables_for_confidence
+        self.top_k_comparables = top_k_comparables
+        self.min_similarity = min_similarity
+        self.max_sale_age_years = max_sale_age_years
+        self.min_data_quality_score = min_data_quality_score
 
     def appraise(
         self,
@@ -51,6 +59,8 @@ class AppraisalService:
             "identification_confidence": 0.0,
             "valuation_confidence": 0.0,
             "currency": currency,
+            "candidate_count": 0,
+            "usable_comparable_count": 0,
         }
 
         if self.analyzer:
@@ -67,20 +77,34 @@ class AppraisalService:
             "identification"
         ):
             try:
-                from pyantique_prices.retrieval.comparables import retrieve_comparables
+                from pyantique_prices.retrieval.comparables import (
+                    retrieve_comparables_details,
+                )
 
                 if self.retrieval_session_factory:
                     with self.retrieval_session_factory() as session:
-                        comparables = retrieve_comparables(
+                        comparable_details = retrieve_comparables_details(
                             session,
                             result["identification"],
+                            top_k=self.top_k_comparables,
+                            min_similarity=self.min_similarity,
+                            max_sale_age_years=self.max_sale_age_years,
+                            min_data_quality_score=self.min_data_quality_score,
                         )
                 else:
-                    comparables = retrieve_comparables(
+                    comparable_details = retrieve_comparables_details(
                         self.retrieval_session,
                         result["identification"],
+                        top_k=self.top_k_comparables,
+                        min_similarity=self.min_similarity,
+                        max_sale_age_years=self.max_sale_age_years,
+                        min_data_quality_score=self.min_data_quality_score,
                     )
-                result["comparables"] = comparables
+                result["comparables"] = comparable_details["comparables"]
+                result["candidate_count"] = comparable_details["candidate_count"]
+                result["usable_comparable_count"] = comparable_details[
+                    "usable_comparable_count"
+                ]
             except Exception as exc:  # noqa: BLE001
                 logger.warning("Comparable retrieval failed: %s", exc)
                 result["warnings"].append(f"Comparable retrieval failed: {exc}")

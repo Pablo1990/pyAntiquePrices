@@ -55,6 +55,8 @@ def _to_response(result: dict[str, Any], model_version: dict[str, str]) -> Appra
         model_version=model_version,
         valuation_available=bool(result.get("valuation_available", False)),
         currency=result.get("currency", "EUR"),
+        candidate_count=int(result.get("candidate_count", 0)),
+        usable_comparable_count=int(result.get("usable_comparable_count", 0)),
     )
 
 

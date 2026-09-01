@@ -2,7 +2,11 @@ from __future__ import annotations
 
 from pyantique_prices.data.database import create_tables, get_engine, get_session_factory
 from pyantique_prices.data.models import HistoricalSale
-from pyantique_prices.retrieval.comparables import retrieve_comparables, score_comparable
+from pyantique_prices.retrieval.comparables import (
+    retrieve_comparables,
+    retrieve_comparables_details,
+    score_comparable,
+)
 
 
 def _make_session():
@@ -65,3 +69,41 @@ def test_retrieve_comparables_orders_by_score():
 
     assert len(results) == 2
     assert results[0]["title"] == "French mantel clock"
+
+
+def test_retrieve_comparables_details_reports_counts():
+    with _make_session() as session:
+        session.add_all(
+            [
+                HistoricalSale(
+                    title="French mantel clock",
+                    object_type="Mantel clock",
+                    country="France",
+                    condition="good",
+                    normalized_price=250.0,
+                    usable_for_training=True,
+                    source_url="https://example.com/clock-1",
+                ),
+                HistoricalSale(
+                    title="Unknown listing",
+                    object_type=None,
+                    country=None,
+                    condition=None,
+                    normalized_price=120.0,
+                    usable_for_training=True,
+                    source_url=None,
+                ),
+            ]
+        )
+        session.commit()
+
+        details = retrieve_comparables_details(
+            session,
+            {"object_type": "clock", "country": "France", "condition": "good"},
+            top_k=5,
+            min_similarity=0.01,
+            min_data_quality_score=0.5,
+        )
+    assert details["candidate_count"] == 2
+    assert details["usable_comparable_count"] == 1
+    assert details["comparables"][0]["title"] == "French mantel clock"

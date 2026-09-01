@@ -30,6 +30,8 @@ class _FakeAppraisalService:
             "valuation_confidence": 0.65,
             "currency": currency or "EUR",
             "evidence": [{"claim": "Clock type", "source": "vision"}],
+            "candidate_count": 12,
+            "usable_comparable_count": 8,
         }
 
 
@@ -76,6 +78,8 @@ def test_appraise_persists_and_can_be_loaded(tmp_path):
     assert body["request_id"] == "req-123"
     assert body["valuation"]["mid"] == 1200.0
     assert body["confidence"]["identification_confidence"] == 0.82
+    assert body["candidate_count"] == 12
+    assert body["usable_comparable_count"] == 8
 
     saved = client.get("/appraisals/1")
     assert saved.status_code == 200

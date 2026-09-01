@@ -9,6 +9,8 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from pyantique_prices.config import settings
 from pyantique_prices.data.database import create_tables, get_engine, get_session_factory
 from pyantique_prices.data.models import HistoricalSale
+from pyantique_prices.embeddings.ollama_embeddings import OllamaTextEmbedder
+from pyantique_prices.retrieval.vector_store import InMemoryVectorStore
 
 
 def build_text_document(sale: HistoricalSale) -> str:
@@ -33,14 +35,11 @@ def main():
     engine = get_engine(settings.database_url)
     create_tables(engine)
     session_factory = get_session_factory(engine)
-
-    try:
-        import ollama
-
-        client = ollama.Client(host=settings.ollama_host)
-    except ImportError:
-        print("ollama package not available")
-        sys.exit(1)
+    embedder = OllamaTextEmbedder(
+        host=settings.ollama_host,
+        model=settings.ollama_embed_model,
+    )
+    vector_store = InMemoryVectorStore()
 
     with session_factory() as session:
         sales = (
@@ -49,19 +48,24 @@ def main():
             .all()
         )
         print(f"Indexing {len(sales)} sales...")
+        indexed = 0
         for sale in sales:
             document = build_text_document(sale)
             if not document.strip():
                 continue
             try:
-                response = client.embeddings(
-                    model=settings.ollama_embed_model,
-                    prompt=document,
+                embedding = embedder.embed(document)
+                sale.text_embedding = embedding
+                vector_store.add(
+                    item_id=sale.id,
+                    embedding=embedding,
+                    metadata={"title": sale.title},
                 )
-                sale.text_embedding = response.embedding
+                indexed += 1
             except Exception as exc:  # noqa: BLE001
                 print(f"Failed to embed sale {sale.id}: {exc}")
         session.commit()
+    print(f"Stored vectors for {indexed} sales.")
     print("Indexing complete.")
 
 

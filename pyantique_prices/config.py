@@ -26,6 +26,15 @@ class Settings:
     top_k_comparables: int = field(
         default_factory=lambda: int(os.getenv("TOP_K_COMPARABLES", "50"))
     )
+    min_similarity: float = field(
+        default_factory=lambda: float(os.getenv("MIN_SIMILARITY", "0.05"))
+    )
+    max_sale_age_years: int = field(
+        default_factory=lambda: int(os.getenv("MAX_SALE_AGE_YEARS", "80"))
+    )
+    min_data_quality_score: float = field(
+        default_factory=lambda: float(os.getenv("MIN_DATA_QUALITY_SCORE", "0.4"))
+    )
     min_comparables_for_model: int = field(
         default_factory=lambda: int(os.getenv("MIN_COMPARABLES_FOR_MODEL", "6"))
     )
