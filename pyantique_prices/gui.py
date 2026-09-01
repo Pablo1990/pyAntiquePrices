@@ -8,7 +8,7 @@ from pathlib import Path
 from tkinter import filedialog, messagebox, scrolledtext, ttk
 
 from .config import Settings
-from .services.appraisal import AppraisalService
+from .services.appraisal import AppraisalService, LegacyWebFallbackEstimator
 from .vision.analyzer import MAX_IMAGES, MIN_IMAGES, SUPPORTED_EXTENSIONS, MultiImageAnalyzer
 from .vision.marks import MarkAnalysisService
 from .vision.ollama import OllamaClient
@@ -230,6 +230,7 @@ class App(tk.Tk):
                 analyzer=analyzer,
                 retrieval_session_factory=session_factory,
                 pricer=pricer,
+                fallback_estimator=LegacyWebFallbackEstimator(model=model),
                 base_currency=settings.base_currency,
                 min_comparables_for_model=settings.min_comparables_for_model,
                 min_comparables_for_confidence=settings.min_comparables_for_confidence,

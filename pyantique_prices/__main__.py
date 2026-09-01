@@ -168,7 +168,7 @@ def _should_use_object_workflow(target, images) -> bool:
 
 def _run_object_cli(args, images) -> int:
     from .config import Settings
-    from .services.appraisal import AppraisalService
+    from .services.appraisal import AppraisalService, LegacyWebFallbackEstimator
     from .vision.analyzer import MultiImageAnalyzer
     from .vision.marks import MarkAnalysisService
     from .vision.ollama import OllamaClient
@@ -219,6 +219,7 @@ def _run_object_cli(args, images) -> int:
         analyzer=analyzer,
         retrieval_session_factory=session_factory,
         pricer=pricer,
+        fallback_estimator=LegacyWebFallbackEstimator(model=args.model),
         base_currency=settings.base_currency,
         min_comparables_for_model=settings.min_comparables_for_model,
         min_comparables_for_confidence=settings.min_comparables_for_confidence,
