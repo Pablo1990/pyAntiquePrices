@@ -23,6 +23,11 @@ def main(argv: list[str] | None = None) -> int:
         ),
     )
     parser.add_argument(
+        "images",
+        nargs="*",
+        help="Optional 3-5 image paths for the AntiqueGPT object workflow.",
+    )
+    parser.add_argument(
         "--context",
         default="",
         help="Free-text context about the item (CLI mode only).",
@@ -76,7 +81,7 @@ def main(argv: list[str] | None = None) -> int:
     )
     args = parser.parse_args(argv)
 
-    if args.cli:
+    if args.cli or args.images:
         return _run_cli(args)
     else:
         return _run_gui()
@@ -95,12 +100,20 @@ def _run_cli(args) -> int:
         )
         return 1
 
-    target = Path(args.cli)
-    try:
-        images = AntiqueAnalyzer.collect_images(target)
-    except FileNotFoundError as exc:
-        print(f"Error: {exc}", file=sys.stderr)
-        return 1
+    if args.images:
+        images = [Path(image) for image in args.images]
+        target = images[0]
+        for image in images:
+            if not image.exists():
+                print(f"Error: Image not found: {image}", file=sys.stderr)
+                return 1
+    else:
+        target = Path(args.cli)
+        try:
+            images = AntiqueAnalyzer.collect_images(target)
+        except FileNotFoundError as exc:
+            print(f"Error: {exc}", file=sys.stderr)
+            return 1
 
     if not images:
         print("No image files found.", file=sys.stderr)
@@ -163,11 +176,12 @@ def _run_cli(args) -> int:
 
 
 def _should_use_object_workflow(target, images) -> bool:
-    return bool(target.is_dir() and 3 <= len(images) <= 5)
+    return bool((target.is_dir() or len(images) > 1) and 3 <= len(images) <= 5)
 
 
 def _run_object_cli(args, images) -> int:
     from .config import Settings
+    from .embeddings import NullImageEmbeddingProvider, OllamaTextEmbeddingProvider
     from .services.appraisal import AppraisalService, LegacyWebFallbackEstimator
     from .vision.analyzer import MultiImageAnalyzer
     from .vision.marks import MarkAnalysisService
@@ -215,9 +229,17 @@ def _run_object_cli(args, images) -> int:
         num_ctx=settings.ollama_num_ctx,
     )
     analyzer = MultiImageAnalyzer(client=client, mark_service=MarkAnalysisService())
+    text_embedding_provider = OllamaTextEmbeddingProvider(
+        host=settings.ollama_host,
+        model=settings.ollama_embed_model,
+        num_ctx=settings.ollama_num_ctx,
+        require_model=False,
+    )
     service = AppraisalService(
         analyzer=analyzer,
         retrieval_session_factory=session_factory,
+        text_embedding_provider=text_embedding_provider,
+        image_embedding_provider=NullImageEmbeddingProvider(),
         pricer=pricer,
         fallback_estimator=LegacyWebFallbackEstimator(model=args.model),
         base_currency=settings.base_currency,
@@ -227,6 +249,11 @@ def _run_object_cli(args, images) -> int:
         min_similarity=settings.min_similarity,
         max_sale_age_years=settings.max_sale_age_years,
         min_data_quality_score=settings.min_data_quality_score,
+        similarity_weights={
+            "semantic": settings.semantic_weight,
+            "visual": settings.visual_weight,
+            "structured": settings.structured_weight,
+        },
     )
 
     context = args.context.strip()
@@ -262,51 +289,80 @@ def _extract_value(field):
     return field
 
 
+def _format_candidates(candidates) -> str:
+    if not candidates:
+        return "N/A"
+    lines = []
+    for candidate in candidates:
+        if not isinstance(candidate, dict) or not candidate.get("name"):
+            continue
+        confidence = float(candidate.get("confidence", 0.0) or 0.0)
+        evidence = candidate.get("evidence")
+        chunk = f"{candidate['name']} ({confidence * 100:.0f}%)"
+        if evidence:
+            chunk += f" – {evidence}"
+        lines.append(chunk)
+    return "; ".join(lines) or "N/A"
+
+
 def _format_object_result(result: dict) -> str:
     identification = result.get("identification") or {}
     valuation = result.get("valuation") or {}
     marks = identification.get("marks") or []
-    manufacturers = ", ".join(
-        candidate.get("name", "")
-        for candidate in identification.get("manufacturer_candidates", []) or []
-        if isinstance(candidate, dict) and candidate.get("name")
-    ) or "N/A"
 
     lines = ["", "--- APPRAISAL ---", ""]
-    lines.append("IDENTIFICATION")
+    lines.append("OBJECT IDENTIFICATION")
     lines.append(f"Object: {_extract_value(identification.get('object_type')) or 'N/A'}")
-    lines.append(f"Period: {_extract_value(identification.get('likely_period')) or 'N/A'}")
-    lines.append(f"Manufacturer candidates: {manufacturers}")
+    lines.append(
+        f"Period: {_extract_value(identification.get('period') or identification.get('likely_period')) or 'N/A'}"
+    )
+    lines.append(
+        f"Manufacturer candidates: {_format_candidates(identification.get('manufacturer_candidates'))}"
+    )
+    lines.append(
+        f"Artist candidates: {_format_candidates(identification.get('artist_candidates'))}"
+    )
+    lines.append(
+        f"Materials: {', '.join(identification.get('materials', [])) or 'N/A'}"
+    )
     lines.append(
         f"Condition: {_extract_value(identification.get('condition')) or 'N/A'}"
     )
     lines.append("")
-    lines.append("MARKS")
+    lines.append("MAKER MARKS")
     if marks:
         for mark in marks:
+            candidates = _format_candidates(mark.get("manufacturer_candidates"))
             lines.append(
-                f"- {mark.get('text') or 'N/A'} "
-                f"(type={mark.get('mark_type') or 'N/A'}, "
-                f"confidence={mark.get('confidence', 0.0):.2f})"
+                f"- Mark: {mark.get('text') or 'Unreadable'} | "
+                f"Confidence: {mark.get('confidence', 0.0):.2f} | "
+                f"Evidence: {mark.get('evidence') or 'N/A'} | "
+                f"Candidates: {candidates}"
             )
     else:
         lines.append("No marks detected.")
     lines.append("")
-    lines.append("COMPARABLE SALES")
+    lines.append("TOP COMPARABLES")
     lines.append(
         f"Candidates: {result.get('candidate_count', 0)} | "
         f"Usable: {result.get('usable_comparable_count', 0)}"
     )
     for comparable in result.get("comparables", [])[:10]:
         lines.append(
-            f"- {comparable.get('title') or 'Untitled'} | "
-            f"{comparable.get('normalized_price')} {result.get('currency', 'EUR')} | "
-            f"score={comparable.get('retrieval_score', 0.0):.3f}"
+            f"- Auction: {comparable.get('auction_house') or 'Unknown'} | "
+            f"Date: {comparable.get('sale_date') or 'N/A'} | "
+            f"Object: {comparable.get('title') or 'Untitled'} | "
+            f"Similarity: {comparable.get('overall_similarity', comparable.get('retrieval_score', 0.0)):.3f} | "
+            f"Price: {comparable.get('normalized_price')} {result.get('currency', 'EUR')}"
         )
     lines.append("")
-    lines.append("VALUATION")
+    lines.append("LEGACY PRICE ESTIMATE")
     if valuation:
-        label = "Estimated market value" if result.get("valuation_available") else "Reference-only estimate"
+        label = (
+            "Estimated market value"
+            if result.get("valuation_available")
+            else "Reference-only estimate"
+        )
         lines.append(
             f"{label}: {result.get('currency', 'EUR')} "
             f"{valuation.get('low')} – {valuation.get('high')}"

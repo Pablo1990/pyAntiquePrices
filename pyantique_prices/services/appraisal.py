@@ -119,6 +119,8 @@ class AppraisalService:
         analyzer=None,
         retrieval_session=None,
         retrieval_session_factory=None,
+        text_embedding_provider=None,
+        image_embedding_provider=None,
         pricer=None,
         fallback_estimator=None,
         base_currency: str = "EUR",
@@ -128,10 +130,13 @@ class AppraisalService:
         min_similarity: float = 0.05,
         max_sale_age_years: int = 80,
         min_data_quality_score: float = 0.4,
+        similarity_weights: dict[str, float] | None = None,
     ) -> None:
         self.analyzer = analyzer
         self.retrieval_session = retrieval_session
         self.retrieval_session_factory = retrieval_session_factory
+        self.text_embedding_provider = text_embedding_provider
+        self.image_embedding_provider = image_embedding_provider
         self.pricer = pricer
         self.fallback_estimator = fallback_estimator
         self.base_currency = base_currency
@@ -141,6 +146,7 @@ class AppraisalService:
         self.min_similarity = min_similarity
         self.max_sale_age_years = max_sale_age_years
         self.min_data_quality_score = min_data_quality_score
+        self.similarity_weights = similarity_weights or {}
 
     def appraise(
         self,
@@ -196,6 +202,9 @@ class AppraisalService:
                             min_similarity=self.min_similarity,
                             max_sale_age_years=self.max_sale_age_years,
                             min_data_quality_score=self.min_data_quality_score,
+                            weights=self.similarity_weights,
+                            text_embedding_provider=self.text_embedding_provider,
+                            image_embedding_provider=self.image_embedding_provider,
                         )
                 else:
                     comparable_details = retrieve_comparables_details(
@@ -205,6 +214,9 @@ class AppraisalService:
                         min_similarity=self.min_similarity,
                         max_sale_age_years=self.max_sale_age_years,
                         min_data_quality_score=self.min_data_quality_score,
+                        weights=self.similarity_weights,
+                        text_embedding_provider=self.text_embedding_provider,
+                        image_embedding_provider=self.image_embedding_provider,
                     )
                 result["comparables"] = comparable_details["comparables"]
                 result["candidate_count"] = comparable_details["candidate_count"]

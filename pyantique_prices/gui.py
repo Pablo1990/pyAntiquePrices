@@ -8,6 +8,7 @@ from pathlib import Path
 from tkinter import filedialog, messagebox, scrolledtext, ttk
 
 from .config import Settings
+from .embeddings import NullImageEmbeddingProvider, OllamaTextEmbeddingProvider
 from .services.appraisal import AppraisalService, LegacyWebFallbackEstimator
 from .vision.analyzer import MAX_IMAGES, MIN_IMAGES, SUPPORTED_EXTENSIONS, MultiImageAnalyzer
 from .vision.marks import MarkAnalysisService
@@ -210,6 +211,12 @@ class App(tk.Tk):
                 num_ctx=settings.ollama_num_ctx,
             )
             analyzer = MultiImageAnalyzer(client=client, mark_service=MarkAnalysisService())
+            text_embedding_provider = OllamaTextEmbeddingProvider(
+                host=settings.ollama_host,
+                model=settings.ollama_embed_model,
+                num_ctx=settings.ollama_num_ctx,
+                require_model=False,
+            )
             pricer = None
             pricing_warning = None
             try:
@@ -229,6 +236,8 @@ class App(tk.Tk):
             service = AppraisalService(
                 analyzer=analyzer,
                 retrieval_session_factory=session_factory,
+                text_embedding_provider=text_embedding_provider,
+                image_embedding_provider=NullImageEmbeddingProvider(),
                 pricer=pricer,
                 fallback_estimator=LegacyWebFallbackEstimator(model=model),
                 base_currency=settings.base_currency,
@@ -238,6 +247,11 @@ class App(tk.Tk):
                 min_similarity=settings.min_similarity,
                 max_sale_age_years=settings.max_sale_age_years,
                 min_data_quality_score=settings.min_data_quality_score,
+                similarity_weights={
+                    "semantic": settings.semantic_weight,
+                    "visual": settings.visual_weight,
+                    "structured": settings.structured_weight,
+                },
             )
             full_context = _build_context(
                 context=context,
@@ -328,6 +342,22 @@ def _extract_value(field):
     return field
 
 
+def _format_candidates(candidates) -> str:
+    if not candidates:
+        return "N/A"
+    parts = []
+    for candidate in candidates:
+        if not isinstance(candidate, dict) or not candidate.get("name"):
+            continue
+        confidence = float(candidate.get("confidence", 0.0) or 0.0)
+        evidence = candidate.get("evidence")
+        text = f"{candidate['name']} ({confidence * 100:.0f}%)"
+        if evidence:
+            text += f" – {evidence}"
+        parts.append(text)
+    return "; ".join(parts) or "N/A"
+
+
 def _pricing_model_name(result: dict) -> str:
     valuation = result.get("valuation") or {}
     if isinstance(valuation, dict):
@@ -339,39 +369,41 @@ def _format_appraisal(result: dict) -> str:
     identification = result.get("identification") or {}
     valuation = result.get("valuation") or {}
     marks = identification.get("marks") or []
-    manufacturer_candidates = identification.get("manufacturer_candidates") or []
-    manufacturers = ", ".join(
-        candidate.get("name", "")
-        for candidate in manufacturer_candidates
-        if isinstance(candidate, dict) and candidate.get("name")
-    ) or "N/A"
 
     lines = []
-    lines.append("IDENTIFICATION")
+    lines.append("OBJECT IDENTIFICATION")
     lines.append("-" * 43)
     lines.append(f"Object: {_extract_value(identification.get('object_type')) or 'N/A'}")
-    lines.append(f"Period: {_extract_value(identification.get('likely_period')) or 'N/A'}")
-    lines.append(f"Manufacturer candidates: {manufacturers}")
+    lines.append(
+        f"Period: {_extract_value(identification.get('period') or identification.get('likely_period')) or 'N/A'}"
+    )
+    lines.append(
+        f"Manufacturer candidates: {_format_candidates(identification.get('manufacturer_candidates'))}"
+    )
+    lines.append(
+        f"Artist candidates: {_format_candidates(identification.get('artist_candidates'))}"
+    )
     lines.append(
         f"Materials: {', '.join(identification.get('materials', [])) or 'N/A'}"
     )
     lines.append(f"Condition: {_extract_value(identification.get('condition')) or 'N/A'}")
     lines.append("")
 
-    lines.append("MARKS")
+    lines.append("MAKER MARKS")
     lines.append("-" * 43)
     if marks:
         for mark in marks:
             lines.append(
-                f"- {mark.get('text') or 'N/A'} | type={mark.get('mark_type') or 'N/A'} | "
-                f"confidence={mark.get('confidence', 0.0):.2f} | "
-                f"candidates={', '.join(mark.get('manufacturer_candidates', [])) or 'N/A'}"
+                f"- Mark: {mark.get('text') or 'Unreadable'} | "
+                f"Confidence: {mark.get('confidence', 0.0):.2f} | "
+                f"Evidence: {mark.get('evidence') or 'N/A'} | "
+                f"Candidates: {_format_candidates(mark.get('manufacturer_candidates'))}"
             )
     else:
         lines.append("No marks detected.")
     lines.append("")
 
-    lines.append("COMPARABLE SALES")
+    lines.append("TOP COMPARABLES")
     lines.append("-" * 43)
     lines.append(
         f"Candidates: {result.get('candidate_count', 0)} | "
@@ -380,13 +412,15 @@ def _format_appraisal(result: dict) -> str:
     comparables = result.get("comparables", [])
     for comparable in comparables[:10]:
         lines.append(
-            f"- {comparable.get('title') or 'Untitled'} | "
-            f"{comparable.get('normalized_price')} {result.get('currency', 'EUR')} | "
-            f"score={comparable.get('retrieval_score', 0.0):.3f}"
+            f"- Auction: {comparable.get('auction_house') or 'Unknown'} | "
+            f"Date: {comparable.get('sale_date') or 'N/A'} | "
+            f"Object: {comparable.get('title') or 'Untitled'} | "
+            f"Similarity: {comparable.get('overall_similarity', comparable.get('retrieval_score', 0.0)):.3f} | "
+            f"Price: {comparable.get('normalized_price')} {result.get('currency', 'EUR')}"
         )
     lines.append("")
 
-    lines.append("VALUATION")
+    lines.append("LEGACY PRICE ESTIMATE")
     lines.append("-" * 43)
     if valuation and result.get("valuation_available"):
         lines.append(

@@ -27,7 +27,7 @@ class Settings:
     )
     base_currency: str = field(default_factory=lambda: os.getenv("BASE_CURRENCY", "EUR"))
     top_k_comparables: int = field(
-        default_factory=lambda: int(os.getenv("TOP_K_COMPARABLES", "50"))
+        default_factory=lambda: int(os.getenv("TOP_K_COMPARABLES", "20"))
     )
     min_similarity: float = field(
         default_factory=lambda: float(os.getenv("MIN_SIMILARITY", "0.05"))
@@ -47,6 +47,15 @@ class Settings:
     enable_image_embeddings: bool = field(
         default_factory=lambda: os.getenv("ENABLE_IMAGE_EMBEDDINGS", "false").lower()
         == "true"
+    )
+    semantic_weight: float = field(
+        default_factory=lambda: float(os.getenv("SEMANTIC_WEIGHT", "0.50"))
+    )
+    visual_weight: float = field(
+        default_factory=lambda: float(os.getenv("VISUAL_WEIGHT", "0.30"))
+    )
+    structured_weight: float = field(
+        default_factory=lambda: float(os.getenv("STRUCTURED_WEIGHT", "0.20"))
     )
     price_target: str = field(
         default_factory=lambda: os.getenv(

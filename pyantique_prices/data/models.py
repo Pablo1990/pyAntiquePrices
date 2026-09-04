@@ -59,6 +59,7 @@ class HistoricalSale(Base):
     outlier_reason = Column(String(500))
     usable_for_training = Column(Boolean, default=True)
     text_embedding = Column(JSON)
+    image_embedding = Column(JSON)
     created_at = Column(DateTime, default=datetime.datetime.utcnow)
     updated_at = Column(
         DateTime,
