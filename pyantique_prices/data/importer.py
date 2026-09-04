@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import csv
 import datetime
+import json
 import logging
 from dataclasses import dataclass
 from pathlib import Path
@@ -23,6 +24,15 @@ class ImportResult:
 
 
 SUPPORTED_CURRENCIES = {"EUR", "GBP", "USD", "CHF", "CAD", "AUD", "JPY"}
+
+
+def _parse_jsonish(value):
+    if value in (None, ""):
+        return None
+    try:
+        return json.loads(value)
+    except (TypeError, json.JSONDecodeError):
+        return value
 
 
 def import_csv(path: str | Path, session, base_currency: str = "EUR") -> ImportResult:
@@ -87,18 +97,27 @@ def import_csv(path: str | Path, session, base_currency: str = "EUR") -> ImportR
                 period=row.get("period"),
                 manufacturer=row.get("manufacturer"),
                 artist=row.get("artist"),
+                workshop=row.get("workshop"),
+                material=row.get("material"),
+                technique=row.get("technique"),
                 condition=row.get("condition"),
                 country=row.get("country"),
+                region=row.get("region"),
+                marks=row.get("marks"),
+                provenance=row.get("provenance"),
                 auction_house=row.get("auction_house"),
                 sale_date=sale_date,
                 currency=currency,
                 final_price=price,
+                image_urls=_parse_jsonish(row.get("image_urls")),
                 source_url=source_url,
                 original_currency=currency,
                 original_price=price,
                 normalized_currency=base_currency,
                 normalized_price=normalized,
                 price_basis=row.get("price_basis", "realized"),
+                text_embedding=_parse_jsonish(row.get("text_embedding")),
+                image_embedding=_parse_jsonish(row.get("image_embedding")),
             )
             session.add(sale)
             result.rows_inserted += 1

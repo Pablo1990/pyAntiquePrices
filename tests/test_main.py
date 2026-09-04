@@ -22,3 +22,13 @@ def test_should_not_use_object_workflow_for_large_directory_batch(tmp_path):
         (tmp_path / f"img{idx}.jpg").write_bytes(b"x")
 
     assert _should_use_object_workflow(tmp_path, sorted(tmp_path.iterdir())) is False
+
+
+def test_should_use_object_workflow_for_three_explicit_files(tmp_path):
+    files = []
+    for idx in range(3):
+        path = tmp_path / f"img{idx}.jpg"
+        path.write_bytes(b"x")
+        files.append(path)
+
+    assert _should_use_object_workflow(files[0], files) is True
