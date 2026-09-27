@@ -9,6 +9,8 @@ import pytest
 from pyantique_prices.scraping.sources import (
     AICScraper,
     CatawikiScraper,
+    EbayApiError,
+    EbayApiScraper,
     EbayEsScraper,
     LibraryOfCongressScraper,
     _parse_date_loose,
@@ -261,3 +263,156 @@ class TestLibraryOfCongressScraper:
         assert items[0]["auction_house"] == "Library of Congress"
         assert items[0]["final_price"] is None
         assert items[0]["sale_date"] is not None
+
+
+# ---------------------------------------------------------------------------
+# EbayApiScraper
+# ---------------------------------------------------------------------------
+
+def _resp(status: int, payload: dict | None = None) -> MagicMock:
+    r = MagicMock()
+    r.status_code = status
+    r.ok = 200 <= status < 300
+    r.json.return_value = payload or {}
+    r.text = str(payload)
+    return r
+
+
+class TestEbayApiScraper:
+    def _make_scraper(self, mode: str = "sold", allowed: bool = True, **kw) -> EbayApiScraper:
+        scraper = EbayApiScraper(
+            crawl_delay=0,
+            client_id=kw.pop("client_id", "id"),
+            client_secret=kw.pop("client_secret", "secret"),
+            marketplace_id="EBAY_ES",
+            environment="production",
+            mode=mode,
+            **kw,
+        )
+        mock_rp = MagicMock()
+        mock_rp.can_fetch.return_value = allowed
+        mock_rp.crawl_delay.return_value = None
+        scraper._robots = mock_rp
+        scraper._session = MagicMock()
+        scraper._session.post.return_value = _resp(
+            200, {"access_token": "tok", "expires_in": 7200}
+        )
+        return scraper
+
+    def test_skips_when_robots_disallows(self):
+        scraper = self._make_scraper(allowed=False)
+        assert scraper.scrape("reloj") == []
+        scraper._session.get.assert_not_called()
+
+    def test_missing_credentials_raises(self):
+        scraper = self._make_scraper(client_id="", client_secret="")
+        scraper.client_id = scraper.client_secret = ""
+        with pytest.raises(EbayApiError):
+            scraper.scrape("reloj")
+
+    def test_oauth_scope_error_raises_with_hint(self):
+        scraper = self._make_scraper()
+        scraper._session.post.return_value = _resp(
+            400, {"error": "invalid_scope", "error_description": "The requested scope is invalid"}
+        )
+        with pytest.raises(EbayApiError, match="Marketplace Insights"):
+            scraper.scrape("reloj")
+
+    def test_sold_mode_parses_item_sales(self):
+        scraper = self._make_scraper(mode="sold")
+        scraper._session.get.return_value = _resp(
+            200,
+            {
+                "total": 1,
+                "itemSales": [
+                    {
+                        "itemId": "v1|1|0",
+                        "title": "Reloj de bolsillo plata 1890",
+                        "lastSoldPrice": {"value": "145.50", "currency": "EUR"},
+                        "lastSoldDate": "2024-03-01T10:15:30.000Z",
+                        "itemWebUrl": "https://www.ebay.es/itm/1",
+                        "categories": [{"categoryId": "20081", "categoryName": "Antigüedades"}],
+                    }
+                ],
+            },
+        )
+        items = scraper.scrape("reloj bolsillo")
+        assert len(items) == 1
+        item = items[0]
+        assert item["final_price"] == 145.50
+        assert item["currency"] == "EUR"
+        assert item["sale_date"] == "2024-03-01T10:15:30"
+        assert item["price_basis"] == "realized"
+        assert item["auction_house"] == "eBay.es"
+        assert item["category"] == "Antigüedades"
+
+        _, kwargs = scraper._session.get.call_args
+        assert kwargs["headers"]["Authorization"] == "Bearer tok"
+        assert kwargs["headers"]["X-EBAY-C-MARKETPLACE-ID"] == "EBAY_ES"
+        assert kwargs["params"]["category_ids"] == "20081"
+        assert "marketplace_insights" in scraper._session.get.call_args[0][0]
+        # Insights scope requested for sold mode
+        assert "buy.marketplace.insights" in scraper._session.post.call_args.kwargs["data"]["scope"]
+
+    def test_active_mode_uses_browse_and_marks_asking(self):
+        scraper = self._make_scraper(mode="active")
+        scraper._session.get.return_value = _resp(
+            200,
+            {
+                "total": 1,
+                "itemSummaries": [
+                    {
+                        "title": "Jarrón porcelana",
+                        "price": {"value": "80.00", "currency": "EUR"},
+                        "itemWebUrl": "https://www.ebay.es/itm/2",
+                    }
+                ],
+            },
+        )
+        items = scraper.scrape("porcelana")
+        assert items[0]["price_basis"] == "asking"
+        assert items[0]["final_price"] == 80.0
+        assert "/buy/browse/v1/" in scraper._session.get.call_args[0][0]
+
+    def test_paginates_until_max_results(self):
+        scraper = self._make_scraper(mode="active")
+        page = lambda n: _resp(  # noqa: E731
+            200,
+            {
+                "total": 1000,
+                "next": "more",
+                "itemSummaries": [
+                    {"title": f"Item {i}", "itemWebUrl": f"https://e/{n}-{i}"}
+                    for i in range(200)
+                ],
+            },
+        )
+        scraper._session.get.side_effect = [page(0), page(1)]
+        items = scraper.scrape("x", max_results=250)
+        assert len(items) == 250
+        offsets = [c.kwargs["params"]["offset"] for c in scraper._session.get.call_args_list]
+        limits = [c.kwargs["params"]["limit"] for c in scraper._session.get.call_args_list]
+        assert offsets == [0, 200]
+        assert limits == [200, 50]
+
+    def test_forbidden_raises(self):
+        scraper = self._make_scraper()
+        scraper._session.get.return_value = _resp(403, {"errors": []})
+        with pytest.raises(EbayApiError):
+            scraper.scrape("reloj")
+
+    def test_rate_limited_returns_partial(self):
+        scraper = self._make_scraper(mode="active")
+        scraper._session.get.return_value = _resp(429)
+        assert scraper.scrape("reloj") == []
+
+    def test_token_is_reused(self):
+        scraper = self._make_scraper(mode="active")
+        scraper._session.get.return_value = _resp(200, {"total": 0, "itemSummaries": []})
+        scraper.scrape("a")
+        scraper.scrape("b")
+        assert scraper._session.post.call_count == 1
+
+    def test_invalid_mode(self):
+        with pytest.raises(ValueError):
+            EbayApiScraper(mode="bogus", client_id="a", client_secret="b")

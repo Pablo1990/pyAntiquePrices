@@ -409,6 +409,24 @@ Import historical sales:
 python scripts/import_sales.py data/sales.csv
 ```
 
+Or populate the DB directly from eBay's official API (recommended over HTML
+scraping, which eBay's `robots.txt` disallows). Create a keyset at
+<https://developer.ebay.com/my/keys> and export your credentials (other
+`EBAY_*` settings are listed in `.env.example`):
+
+```bash
+export EBAY_CLIENT_ID=...  EBAY_CLIENT_SECRET=...
+
+# Sold items with realised prices (Marketplace Insights API – needs eBay approval)
+python scripts/scrape_sales.py --keywords "reloj bolsillo antiguo" --sources ebay_api
+
+# Active listings (Browse API – any keyset); stored with price_basis="asking"
+python scripts/scrape_sales.py --keywords "reloj bolsillo antiguo" --sources ebay_api --ebay-api-mode active
+```
+
+Results are limited to eBay's *Antiques* category (`EBAY_CATEGORY_IDS=20081`)
+on the `EBAY_MARKETPLACE_ID` marketplace (default `EBAY_ES`).
+
 Generate text embeddings for imported sales:
 
 ```bash
@@ -570,6 +588,7 @@ pyAntiquePrices/
 ## Legal & ethical notes
 
 - **Privacy**: The LLM runs entirely locally via Ollama. No image data is sent to any external service.
+- **eBay data**: eBay is accessed through its official REST API (`ebay_api` source), subject to the eBay API License Agreement and your application's call limits. `robots.txt` on the API host is still checked before every request.
 - **Web scraping**: The DuckDuckGo scraper respects `robots.txt` and applies a configurable crawl delay (default 3 s). It identifies itself with a descriptive `User-Agent`.
 - **Accuracy**: Appraisals are AI-generated estimates based on visual information only. They should be treated as a starting point, not a professional valuation. For high-value items, consult a certified appraiser.
 

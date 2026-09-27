@@ -2,7 +2,9 @@
 
 Supported sources
 -----------------
-* eBay.es  – completed/sold listings (2021-present)
+* eBay API – official eBay REST APIs (Marketplace Insights / Browse);
+  the recommended eBay source, see :class:`EbayApiScraper`
+* eBay.es  – completed/sold listings via HTML (usually blocked by robots.txt)
 * Catawiki – closed lots (2021-present)
 * AIC      – American Institute for Conservation references
 * LoC      – Library of Congress, Preservation resources
@@ -454,6 +456,273 @@ class LibraryOfCongressScraper(_BaseAuctionScraper):
 
 
 # ---------------------------------------------------------------------------
+# eBay – official REST APIs (OAuth2 client-credentials)
+# ---------------------------------------------------------------------------
+
+class EbayApiError(RuntimeError):
+    """Raised when the eBay API cannot be used (missing keys, auth failure)."""
+
+
+class EbayApiScraper(_BaseAuctionScraper):
+    """Fetch eBay listings through eBay's official REST APIs.
+
+    This is the recommended way to get eBay data: eBay's ``robots.txt``
+    disallows automated crawling of its search pages, so the HTML-based
+    :class:`EbayEsScraper` usually returns nothing.  The API is the
+    sanctioned channel and is governed by the eBay API License Agreement and
+    per-application call limits instead.
+
+    Two modes are supported:
+
+    ``"sold"`` (default)
+        Marketplace Insights API – completed sales with the realised price
+        and sale date (last 90 days).  Access to this API is restricted: your
+        eBay developer application must be approved for the
+        ``buy.marketplace.insights`` scope.  Records get
+        ``price_basis="realized"``.
+
+    ``"active"``
+        Browse API – currently *active* listings.  Available to every
+        developer key, but the prices are asking prices, not hammer prices.
+        Records get ``price_basis="asking"`` so they can be told apart from
+        realised sales downstream.
+
+    robots.txt is still fetched from the API host and honoured before every
+    request, and the configured crawl delay is applied between calls.
+
+    Credentials are read from the ``EBAY_CLIENT_ID`` / ``EBAY_CLIENT_SECRET``
+    environment variables (see ``.env.example``) unless passed explicitly.
+    """
+
+    source_name = "ebay_api"
+
+    _HOSTS = {
+        "production": "https://api.ebay.com",
+        "sandbox": "https://api.sandbox.ebay.com",
+    }
+    _TOKEN_PATH = "/identity/v1/oauth2/token"
+    _BROWSE_PATH = "/buy/browse/v1/item_summary/search"
+    _INSIGHTS_PATH = "/buy/marketplace_insights/v1_beta/item_sales/search"
+
+    _SCOPE_BASE = "https://api.ebay.com/oauth/api_scope"
+    _SCOPE_INSIGHTS = "https://api.ebay.com/oauth/api_scope/buy.marketplace.insights"
+
+    # eBay caps ``limit`` at 200 for both endpoints; offset + limit <= 10 000.
+    _PAGE_SIZE = 200
+    _MAX_OFFSET = 10_000
+
+    _MARKETPLACE_LABELS = {
+        "EBAY_ES": "eBay.es",
+        "EBAY_GB": "eBay.co.uk",
+        "EBAY_US": "eBay.com",
+        "EBAY_DE": "eBay.de",
+        "EBAY_FR": "eBay.fr",
+        "EBAY_IT": "eBay.it",
+    }
+
+    def __init__(
+        self,
+        crawl_delay: float = 1.0,
+        *,
+        client_id: Optional[str] = None,
+        client_secret: Optional[str] = None,
+        marketplace_id: Optional[str] = None,
+        environment: Optional[str] = None,
+        mode: Optional[str] = None,
+        category_ids: Optional[str] = None,
+    ) -> None:
+        super().__init__(crawl_delay=crawl_delay)
+        # Imported lazily so the module has no hard dependency on config.
+        from pyantique_prices.config import settings
+
+        self.client_id = client_id or settings.ebay_client_id
+        self.client_secret = client_secret or settings.ebay_client_secret
+        self.marketplace_id = (marketplace_id or settings.ebay_marketplace_id).upper()
+        env = (environment or settings.ebay_environment).lower()
+        if env not in self._HOSTS:
+            raise ValueError(f"EBAY_ENVIRONMENT must be one of {list(self._HOSTS)}")
+        self.environment = env
+        self.base_url = self._HOSTS[env]
+        self.mode = (mode or "sold").lower()
+        if self.mode not in ("sold", "active"):
+            raise ValueError("mode must be 'sold' or 'active'")
+        # eBay category 20081 = "Antiques"; restricts results to that tree.
+        self.category_ids = (
+            category_ids if category_ids is not None else settings.ebay_category_ids
+        )
+
+        self._session.headers.update({"Accept": "application/json"})
+        self._token: Optional[str] = None
+        self._token_expiry: float = 0.0
+
+    # ------------------------------------------------------------------
+    # OAuth
+    # ------------------------------------------------------------------
+
+    def _get_token(self) -> str:
+        if self._token and time.monotonic() < self._token_expiry - 60:
+            return self._token
+
+        if not self.client_id or not self.client_secret:
+            raise EbayApiError(
+                "eBay API credentials missing – set EBAY_CLIENT_ID and "
+                "EBAY_CLIENT_SECRET (create a keyset at "
+                "https://developer.ebay.com/my/keys)."
+            )
+
+        scope = self._SCOPE_INSIGHTS if self.mode == "sold" else self._SCOPE_BASE
+        self._polite_wait()
+        try:
+            response = self._session.post(
+                f"{self.base_url}{self._TOKEN_PATH}",
+                auth=(self.client_id, self.client_secret),
+                data={"grant_type": "client_credentials", "scope": scope},
+                headers={"Content-Type": "application/x-www-form-urlencoded"},
+                timeout=_REQUEST_TIMEOUT,
+            )
+        except requests.RequestException as exc:
+            raise EbayApiError(f"eBay OAuth request failed: {exc}") from exc
+        finally:
+            self._last_request_time = time.monotonic()
+
+        if response.status_code != 200:
+            detail = _safe_json(response).get("error_description") or response.text[:200]
+            hint = ""
+            if self.mode == "sold" and "scope" in detail.lower():
+                hint = (
+                    " – your application is not approved for the Marketplace "
+                    "Insights API. Request access from eBay, or use "
+                    "--ebay-api-mode active (asking prices only)."
+                )
+            raise EbayApiError(
+                f"eBay OAuth failed ({response.status_code}): {detail}{hint}"
+            )
+
+        payload = response.json()
+        self._token = payload["access_token"]
+        self._token_expiry = time.monotonic() + float(payload.get("expires_in", 7200))
+        return self._token
+
+    # ------------------------------------------------------------------
+    # Requests
+    # ------------------------------------------------------------------
+
+    def _api_get(self, path: str, params: dict) -> Optional[dict]:
+        self._polite_wait()
+        try:
+            response = self._session.get(
+                f"{self.base_url}{path}",
+                params=params,
+                headers={
+                    "Authorization": f"Bearer {self._get_token()}",
+                    "X-EBAY-C-MARKETPLACE-ID": self.marketplace_id,
+                },
+                timeout=_REQUEST_TIMEOUT,
+            )
+        except requests.RequestException as exc:
+            logger.error("eBay API request failed: %s", exc)
+            return None
+        finally:
+            self._last_request_time = time.monotonic()
+
+        if response.status_code == 429:
+            logger.error("eBay API rate limit reached – stopping for now.")
+            return None
+        if response.status_code in (401, 403):
+            raise EbayApiError(
+                f"eBay API refused access to {path} ({response.status_code}): "
+                f"{response.text[:200]}"
+            )
+        if not response.ok:
+            logger.error(
+                "eBay API error %s for %s: %s",
+                response.status_code, path, response.text[:200],
+            )
+            return None
+        return _safe_json(response)
+
+    def scrape(self, keywords: str, max_results: int = 50) -> list[dict]:
+        path = self._INSIGHTS_PATH if self.mode == "sold" else self._BROWSE_PATH
+        if not self._is_allowed(path):
+            logger.warning(
+                "%s robots.txt disallows %s – skipping.", self.base_url, path
+            )
+            return []
+
+        self.crawl_delay = max(self.crawl_delay, self._crawl_delay_from_robots())
+
+        results: list[dict] = []
+        offset = 0
+        while len(results) < max_results and offset < self._MAX_OFFSET:
+            limit = min(self._PAGE_SIZE, max_results - len(results))
+            params = {"q": keywords, "limit": limit, "offset": offset}
+            if self.category_ids:
+                params["category_ids"] = self.category_ids
+
+            data = self._api_get(path, params)
+            if not data:
+                break
+
+            key = "itemSales" if self.mode == "sold" else "itemSummaries"
+            page = [self._parse_item(item) for item in data.get(key) or []]
+            page = [p for p in page if p]
+            if not page:
+                break
+            results.extend(page)
+
+            offset += limit
+            if not data.get("next") or offset >= int(data.get("total", 0)):
+                break
+
+        logger.info(
+            "eBay API (%s, %s): %d items for '%s'",
+            self.mode, self.marketplace_id, len(results), keywords,
+        )
+        return results[:max_results]
+
+    # ------------------------------------------------------------------
+    # Parsing
+    # ------------------------------------------------------------------
+
+    def _parse_item(self, item: dict) -> Optional[dict]:
+        title = item.get("title")
+        if not title:
+            return None
+
+        if self.mode == "sold":
+            price_obj = item.get("lastSoldPrice") or {}
+            date_raw = item.get("lastSoldDate")
+            basis = "realized"
+        else:
+            price_obj = item.get("price") or item.get("currentBidPrice") or {}
+            date_raw = item.get("itemEndDate") or item.get("itemCreationDate")
+            basis = "asking"
+
+        try:
+            price = float(price_obj["value"]) if price_obj.get("value") else None
+        except (TypeError, ValueError):
+            price = None
+
+        sale_date = _parse_iso_utc(date_raw)
+        categories = item.get("categories") or []
+        category = categories[0].get("categoryName") if categories else None
+
+        return {
+            "title": title,
+            "description": item.get("shortDescription"),
+            "category": category,
+            "final_price": price,
+            "currency": price_obj.get("currency"),
+            "sale_date": sale_date.isoformat() if sale_date else None,
+            "auction_house": self._MARKETPLACE_LABELS.get(
+                self.marketplace_id, self.marketplace_id
+            ),
+            "source_url": item.get("itemWebUrl") or item.get("itemHref"),
+            "price_basis": basis,
+        }
+
+
+# ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 
@@ -531,3 +800,29 @@ def _parse_date_loose(text: str) -> Optional[datetime.datetime]:
             continue
 
     return None
+
+
+def _safe_json(response: requests.Response) -> dict:
+    """Return the JSON body of *response* as a dict, or ``{}`` if it is not JSON."""
+    try:
+        data = response.json()
+    except ValueError:
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def _parse_iso_utc(text: Optional[str]) -> Optional[datetime.datetime]:
+    """Parse an eBay ISO-8601 timestamp (``2024-03-01T10:15:30.000Z``).
+
+    Returns a naive UTC datetime truncated to whole seconds, so that its
+    ``isoformat()`` matches the formats accepted by ``scrape_sales.py``.
+    """
+    if not text:
+        return None
+    try:
+        dt = datetime.datetime.fromisoformat(text.replace("Z", "+00:00"))
+    except ValueError:
+        return _parse_date_loose(text)
+    if dt.tzinfo is not None:
+        dt = dt.astimezone(datetime.timezone.utc).replace(tzinfo=None)
+    return dt.replace(microsecond=0)

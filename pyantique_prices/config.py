@@ -53,6 +53,21 @@ class Settings:
             "PRICE_TARGET", "normalized_realized_price"
         )
     )
+    # eBay developer API (https://developer.ebay.com/my/keys)
+    ebay_client_id: str = field(default_factory=lambda: os.getenv("EBAY_CLIENT_ID", ""))
+    ebay_client_secret: str = field(
+        default_factory=lambda: os.getenv("EBAY_CLIENT_SECRET", "")
+    )
+    ebay_marketplace_id: str = field(
+        default_factory=lambda: os.getenv("EBAY_MARKETPLACE_ID", "EBAY_ES")
+    )
+    ebay_environment: str = field(
+        default_factory=lambda: os.getenv("EBAY_ENVIRONMENT", "production")
+    )
+    # 20081 = eBay "Antiques" top-level category; empty string = no filter.
+    ebay_category_ids: str = field(
+        default_factory=lambda: os.getenv("EBAY_CATEGORY_IDS", "20081")
+    )
 
 
 settings = Settings()

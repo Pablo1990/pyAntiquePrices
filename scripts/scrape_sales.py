@@ -3,7 +3,9 @@
 
 Supported sources
 -----------------
-* eBay.es         – completed / sold listings
+* eBay API        – official eBay REST APIs (needs EBAY_CLIENT_ID/SECRET)
+* eBay.es         – completed / sold listings via HTML (usually blocked by
+                    eBay's robots.txt – prefer ``ebay_api``)
 * Catawiki        – closed lots
 * AIC             – American Institute for Conservation references
 * LoC             – Library of Congress preservation resources
@@ -28,6 +30,12 @@ Usage
     # Limit results per source
     python scripts/scrape_sales.py --keywords "plata" --max-results 20
 
+    # Use eBay's official API (sold items; needs Marketplace Insights access)
+    python scripts/scrape_sales.py --keywords "reloj bolsillo" --sources ebay_api
+
+    # eBay API with active listings only (asking prices, any developer key)
+    python scripts/scrape_sales.py --keywords "reloj bolsillo" --sources ebay_api --ebay-api-mode active
+
     # Use a custom database URL
     python scripts/scrape_sales.py --keywords "mueble" --db-url sqlite:///./data/test.db
 """
@@ -51,6 +59,8 @@ from pyantique_prices.data.normalizer import normalize_price
 from pyantique_prices.scraping.sources import (
     AICScraper,
     CatawikiScraper,
+    EbayApiError,
+    EbayApiScraper,
     EbayEsScraper,
     LibraryOfCongressScraper,
 )
@@ -62,6 +72,7 @@ logging.basicConfig(
 logger = logging.getLogger("scrape_sales")
 
 _SCRAPERS = {
+    "ebay_api": EbayApiScraper,
     "ebay": EbayEsScraper,
     "catawiki": CatawikiScraper,
     "aic": AICScraper,
@@ -212,6 +223,21 @@ def _build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Enable DEBUG logging.",
     )
+    parser.add_argument(
+        "--ebay-api-mode",
+        choices=["sold", "active"],
+        default="sold",
+        help=(
+            "For --sources ebay_api: 'sold' uses the Marketplace Insights API "
+            "(realised prices, restricted access); 'active' uses the Browse "
+            "API (asking prices of live listings). Default: sold."
+        ),
+    )
+    parser.add_argument(
+        "--ebay-marketplace",
+        default=None,
+        help="eBay marketplace ID, e.g. EBAY_ES, EBAY_GB (default: EBAY_MARKETPLACE_ID env).",
+    )
     return parser
 
 
@@ -239,11 +265,21 @@ def main(argv: list[str] | None = None) -> None:
 
     for source_key in args.sources:
         scraper_cls = _SCRAPERS[source_key]
-        scraper = scraper_cls(crawl_delay=args.crawl_delay)
         logger.info("--- Scraping: %s ---", source_key)
 
         try:
+            if scraper_cls is EbayApiScraper:
+                scraper = scraper_cls(
+                    crawl_delay=args.crawl_delay,
+                    mode=args.ebay_api_mode,
+                    marketplace_id=args.ebay_marketplace,
+                )
+            else:
+                scraper = scraper_cls(crawl_delay=args.crawl_delay)
             records = scraper.scrape(args.keywords, max_results=args.max_results)
+        except EbayApiError as exc:
+            logger.error("%s: %s", source_key, exc)
+            continue
         except Exception as exc:  # noqa: BLE001
             logger.error("%s scraper failed: %s", source_key, exc)
             continue
