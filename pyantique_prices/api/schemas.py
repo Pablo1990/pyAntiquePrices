@@ -25,3 +25,7 @@ class AppraiseResponse(BaseModel):
     # Live eBay listings fetched for this request only (not stored, not
     # used for the valuation). See pyantique_prices/services/live_market.py.
     live_market_listings: dict[str, Any] | None = None
+    # Search links for manual research (nothing fetched or stored) and, when an
+    # asking price was supplied, a buy/pass verdict.
+    lookup_links: dict[str, Any] | None = None
+    deal: dict[str, Any] | None = None

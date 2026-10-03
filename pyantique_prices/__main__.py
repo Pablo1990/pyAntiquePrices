@@ -245,6 +245,7 @@ def _run_object_cli(args, images) -> int:
         pricer=pricer,
         fallback_estimator=LegacyWebFallbackEstimator(model=args.model),
         live_market=EbayLiveListings.from_settings(),
+        ebay_domain=settings.ebay_domain,
         base_currency=settings.base_currency,
         min_comparables_for_model=settings.min_comparables_for_model,
         min_comparables_for_confidence=settings.min_comparables_for_confidence,

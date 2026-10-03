@@ -61,6 +61,8 @@ def _to_response(result: dict[str, Any], model_version: dict[str, str]) -> Appra
         candidate_count=int(result.get("candidate_count", 0)),
         usable_comparable_count=int(result.get("usable_comparable_count", 0)),
         live_market_listings=result.get("live_market_listings"),
+        lookup_links=result.get("lookup_links"),
+        deal=result.get("deal"),
     )
 
 
@@ -73,6 +75,13 @@ async def appraise(
     known_dimensions: str | None = Form(default=None),
     user_description: str | None = Form(default=None),
     provenance: str | None = Form(default=None),
+    asking_price: float | None = Form(default=None, gt=0),
+    shipping: float = Form(default=0.0, ge=0),
+    buyer_premium_pct: float = Form(default=0.0, ge=0),
+    vat_pct: float = Form(default=0.0, ge=0),
+    restoration: float = Form(default=0.0, ge=0),
+    for_resale: bool = Form(default=True),
+    resale_fee_pct: float = Form(default=0.0, ge=0, le=100),
 ) -> AppraiseResponse:
     if len(images) < 3 or len(images) > 5:
         raise HTTPException(status_code=400, detail="Please upload between 3 and 5 images.")
@@ -93,7 +102,22 @@ async def appraise(
         appraisal_service = request.app.state.appraisal_service
         model_version = request.app.state.model_version
         context = _build_context(user_description, provenance, location, known_dimensions)
-        result = appraisal_service.appraise(temp_paths, context=context, currency=currency)
+        extra: dict[str, Any] = {}
+        if asking_price is not None:  # only then does the deal check apply
+            extra = {
+                "asking_price": asking_price,
+                "deal_options": {
+                    "shipping": shipping,
+                    "buyer_premium_pct": buyer_premium_pct,
+                    "vat_pct": vat_pct,
+                    "restoration": restoration,
+                    "for_resale": for_resale,
+                    "resale_fee_pct": resale_fee_pct,
+                },
+            }
+        result = appraisal_service.appraise(
+            temp_paths, context=context, currency=currency, **extra
+        )
 
         session_factory = request.app.state.session_factory
         _, persistence_warning = persist_appraisal(

@@ -125,6 +125,7 @@ class AppraisalService:
         fallback_estimator=None,
         live_market=None,
         base_currency: str = "EUR",
+        ebay_domain: str = "ebay.es",
         min_comparables_for_model: int = 6,
         min_comparables_for_confidence: int = 10,
         top_k_comparables: int = 50,
@@ -145,6 +146,7 @@ class AppraisalService:
         # pricing, or persisted (eBay API License Agreement s. 9(e), 9(g)).
         self.live_market = live_market
         self.base_currency = base_currency
+        self.ebay_domain = ebay_domain
         self.min_comparables_for_model = min_comparables_for_model
         self.min_comparables_for_confidence = min_comparables_for_confidence
         self.top_k_comparables = top_k_comparables
@@ -158,8 +160,16 @@ class AppraisalService:
         images: Sequence[Path | str],
         context: str = "",
         currency: str | None = None,
+        asking_price: float | None = None,
+        deal_options: dict | None = None,
     ) -> dict:
-        """Run the full appraisal pipeline."""
+        """Run the full appraisal pipeline.
+
+        With ``asking_price`` the result also carries a ``deal`` verdict;
+        ``deal_options`` may hold ``shipping``, ``buyer_premium_pct``,
+        ``vat_pct``, ``restoration``, ``other_costs``, ``for_resale``,
+        ``resale_fee_pct``, ``resale_shipping`` and ``min_margin``.
+        """
         request_id = str(uuid.uuid4())
         currency = currency or self.base_currency
 
@@ -176,6 +186,8 @@ class AppraisalService:
             "candidate_count": 0,
             "usable_comparable_count": 0,
             "live_market_listings": None,
+            "lookup_links": None,
+            "deal": None,
         }
 
         if self.analyzer:
@@ -320,7 +332,61 @@ class AppraisalService:
                     False,
                 )
 
+        self._add_research_tools(result, context, asking_price, deal_options)
+
         result["warnings"].append(
             "This is an AI-assisted market estimate, not a formal appraisal."
         )
         return result
+
+    def _add_research_tools(
+        self,
+        result: dict,
+        context: str,
+        asking_price: float | None,
+        deal_options: dict | None,
+    ) -> None:
+        """Research links (always) and a deal verdict (when a price is given)."""
+        try:
+            from pyantique_prices.lookup import build_lookup_links
+
+            links = build_lookup_links(
+                result.get("identification"), context, ebay_domain=self.ebay_domain
+            )
+            result["lookup_links"] = links if links["links"] else None
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Research links failed: %s", exc)
+
+        if asking_price is None:
+            return
+        try:
+            from pyantique_prices.deals import assess_deal
+
+            options = dict(deal_options or {})
+            if "calibration_factor" not in options:
+                options["calibration_factor"] = self._ledger_calibration()
+            result["deal"] = assess_deal(
+                result.get("valuation"),
+                asking_price=asking_price,
+                identification_confidence=result.get("identification_confidence"),
+                **options,
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Deal assessment failed: %s", exc)
+            result["warnings"].append(f"Deal assessment failed: {exc}")
+
+    def _ledger_calibration(self) -> float:
+        """Correction learned from your own past sales (1.0 when unavailable)."""
+        factory = self.retrieval_session_factory
+        if factory is None and self.retrieval_session is None:
+            return 1.0
+        try:
+            from pyantique_prices.ledger import calibration_factor
+
+            if factory is not None:
+                with factory() as session:
+                    return calibration_factor(session)
+            return calibration_factor(self.retrieval_session)
+        except Exception as exc:  # noqa: BLE001 - e.g. ledger table not created yet
+            logger.debug("Ledger calibration unavailable: %s", exc)
+            return 1.0
