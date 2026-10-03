@@ -3,6 +3,8 @@ from __future__ import annotations
 import pickle
 from pathlib import Path
 
+import pytest
+
 from pyantique_prices.pricing.calibration import compute_metrics
 from pyantique_prices.pricing.features import condition_to_float, extract_features
 from pyantique_prices.pricing.model import PricePredictor
@@ -56,9 +58,10 @@ def test_price_predictor_returns_quantile_estimate():
     )
 
     assert result is not None
-    assert result["mid"] == 250.0
+    # Log-space (geometric) median of 200 and 300
+    assert result["mid"] == pytest.approx(244.95, abs=0.01)
     assert result["valuation_available"] is True
-    assert result["method"] == "quantile_estimate"
+    assert result["method"] == "similarity_weighted_estimate"
     assert result["confidence_note"] == "Low confidence: 3-5 comparable sales."
 
 
@@ -103,8 +106,11 @@ def test_price_predictor_uses_artifact_model_when_available(tmp_path):
         comparables,
     )
     assert result is not None
-    assert result["method"] == "model_quantile_estimate"
-    assert result["mid"] == 1200.0
+    # The comparables (~1025) drive the estimate; the 1200 bucket median is
+    # only a prior that pulls it up, never a replacement.
+    assert result["method"] == "model_blended_estimate"
+    assert result["prior_level"] == "object_country"
+    assert 1050.0 < result["mid"] < 1200.0
 
 
 def test_quantiles_and_metrics():
