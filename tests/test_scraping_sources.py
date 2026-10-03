@@ -462,3 +462,52 @@ class TestRobotsFetching:
         s = self._scraper(200, "User-agent: *\nAllow: /\n")
         s._is_allowed("/a"); s._is_allowed("/b")
         assert s._session.get.call_count == 1
+
+
+# ---------------------------------------------------------------------------
+# scrape_sales.py – eBay licence guard
+# ---------------------------------------------------------------------------
+
+class TestScrapeSalesEbayGuard:
+    def _run(self, tmp_path, *extra):
+        import scripts.scrape_sales as ss
+        calls = []
+
+        class FakeEbay:
+            def __init__(self, **kw):
+                pass
+            def scrape(self, keywords, max_results=50):
+                calls.append(keywords)
+                return [{"title": "t", "final_price": 1.0, "currency": "EUR",
+                         "source_url": "https://www.ebay.es/itm/1", "price_basis": "asking"}]
+
+        db = f"sqlite:///{tmp_path / 't.db'}"
+        with patch.dict(ss._SCRAPERS, {"ebay_api": FakeEbay}), \
+             patch.object(ss, "EbayApiScraper", FakeEbay):
+            try:
+                ss.main(["--keywords", "x", "--sources", "ebay_api", "--db-url", db, *extra])
+            except SystemExit as exc:
+                return calls, exc.code
+        return calls, 0
+
+    def test_refuses_to_store_without_permission(self, tmp_path, capsys):
+        calls, code = self._run(tmp_path)
+        assert code == 2
+        assert calls == []
+        assert "Refusing to store eBay data" in capsys.readouterr().err
+
+    def test_dry_run_allowed_without_permission(self, tmp_path):
+        calls, code = self._run(tmp_path, "--dry-run")
+        assert code == 0 and calls == ["x"]
+
+    def test_stores_with_permission(self, tmp_path):
+        import sqlite3
+        calls, code = self._run(tmp_path, "--ebay-data-permission")
+        assert code == 0 and calls == ["x"]
+        n = sqlite3.connect(tmp_path / "t.db").execute(
+            "select count(*) from historical_sales").fetchone()[0]
+        assert n == 1
+
+    def test_ebay_api_not_in_defaults(self):
+        import scripts.scrape_sales as ss
+        assert "ebay_api" not in ss._DEFAULT_SOURCES

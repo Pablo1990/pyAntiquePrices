@@ -3,7 +3,9 @@
 
 Supported sources
 -----------------
-* eBay API        – official eBay REST APIs (needs EBAY_CLIENT_ID/SECRET)
+* eBay API        – official eBay REST APIs (needs EBAY_CLIENT_ID/SECRET).
+                    Writing eBay data to the DB requires written permission
+                    from eBay – see ``--ebay-data-permission``.
 * eBay.es         – completed / sold listings via HTML (usually blocked by
                     eBay's robots.txt – prefer ``ebay_api``)
 * Catawiki        – closed lots
@@ -30,11 +32,11 @@ Usage
     # Limit results per source
     python scripts/scrape_sales.py --keywords "plata" --max-results 20
 
-    # Use eBay's official API (sold items; needs Marketplace Insights access)
-    python scripts/scrape_sales.py --keywords "reloj bolsillo" --sources ebay_api
+    # Check the eBay API connection without storing anything
+    python scripts/scrape_sales.py --keywords "reloj bolsillo" --sources ebay_api --ebay-api-mode active --dry-run
 
-    # eBay API with active listings only (asking prices, any developer key)
-    python scripts/scrape_sales.py --keywords "reloj bolsillo" --sources ebay_api --ebay-api-mode active
+    # Store eBay results – ONLY with written permission from eBay
+    python scripts/scrape_sales.py --keywords "reloj bolsillo" --sources ebay_api --ebay-data-permission
 
     # Use a custom database URL
     python scripts/scrape_sales.py --keywords "mueble" --db-url sqlite:///./data/test.db
@@ -83,7 +85,27 @@ _SCRAPERS = {
 # are permitted by robots.txt.  "ebay" (HTML) is blocked by eBay's
 # robots.txt, and "aic"/"loc" only yield price-less reference records, so
 # they are opt-in.
-_DEFAULT_SOURCES = ["ebay_api", "catawiki"]
+_DEFAULT_SOURCES = ["catawiki"]
+
+# Sources whose terms forbid storing their data without a separate licence.
+_EBAY_LICENSE_NOTICE = """\
+Refusing to store eBay data in the database.
+
+The eBay API License Agreement (3 Sep 2025) does not allow, without eBay's
+express written permission:
+  * storing or copying eBay Content beyond temporary copies   (s. 9(g), 3.1)
+  * using eBay Content to suggest or model prices             (s. 9(e))
+  * using eBay Content to train algorithms / machine learning (s. 9(j))
+A historical price DB for appraisal / model training needs all three.
+
+Options:
+  * Ask eBay for a data licence covering this use (e.g. via the Developer
+    Program / Marketplace Insights application) and, once granted in writing,
+    re-run with --ebay-data-permission.
+  * Use --dry-run to check your API connection without storing anything.
+  * Fill the DB from licensed sources instead: scripts/import_sales.py CSV.
+Full text: https://developer.ebay.com/join/api-license-agreement
+"""
 
 
 # ---------------------------------------------------------------------------
@@ -189,9 +211,10 @@ def _build_parser() -> argparse.ArgumentParser:
         choices=list(_SCRAPERS),
         default=_DEFAULT_SOURCES,
         help=(
-            "Which sources to scrape (default: %(default)s). 'ebay' is the "
-            "HTML scraper, blocked by eBay's robots.txt – use 'ebay_api'. "
-            "'aic' and 'loc' return reference records without prices."
+            "Which sources to scrape (default: %(default)s). 'ebay_api' "
+            "only stores data with --ebay-data-permission. 'ebay' is the "
+            "HTML scraper, blocked by eBay's robots.txt. 'aic' and 'loc' "
+            "return reference records without prices."
         ),
     )
     parser.add_argument(
@@ -244,6 +267,15 @@ def _build_parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument(
+        "--ebay-data-permission",
+        action="store_true",
+        help=(
+            "Confirm you hold express written permission from eBay to store "
+            "eBay Content and use it for price modelling / ML. Required to "
+            "write ebay_api results to the database."
+        ),
+    )
+    parser.add_argument(
         "--ebay-marketplace",
         default=None,
         help="eBay marketplace ID, e.g. EBAY_ES, EBAY_GB (default: EBAY_MARKETPLACE_ID env).",
@@ -266,6 +298,16 @@ def main(argv: list[str] | None = None) -> None:
     logger.info("Max results: %d per source", args.max_results)
     logger.info("DB URL     : %s", db_url)
     logger.info("Dry-run    : %s", args.dry_run)
+
+    if (
+        "ebay_api" in args.sources
+        and not args.dry_run
+        and not args.ebay_data_permission
+    ):
+        print(_EBAY_LICENSE_NOTICE, file=sys.stderr)
+        args.sources = [src for src in args.sources if src != "ebay_api"]
+        if not args.sources:
+            raise SystemExit(2)
 
     engine = get_engine(db_url)
     create_tables(engine)

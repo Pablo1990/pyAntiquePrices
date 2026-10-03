@@ -409,25 +409,34 @@ Import historical sales:
 python scripts/import_sales.py data/sales.csv
 ```
 
-Or populate the DB directly from eBay's official API (recommended over HTML
-scraping, which eBay's `robots.txt` disallows). Create a keyset at
-<https://developer.ebay.com/my/keys>, then copy `.env.example` to `.env`
-(git-ignored, loaded automatically) and fill in `EBAY_CLIENT_ID` (your
-**App ID**) and `EBAY_CLIENT_SECRET` (your **Cert ID**). The Dev ID is not
-needed.
+### Where the price data can (legally) come from
+
+The pipeline needs a database of past prices. Sources and what their terms allow:
+
+| Source | How | Can it be stored and used for pricing / training? |
+|---|---|---|
+| Your own or licensed data (auction results you have rights to, a paid price database whose licence allows it, your lab's records) | `scripts/import_sales.py data/sales.csv` | Yes, within that licence. **Recommended.** |
+| Catawiki closed lots | `scripts/scrape_sales.py --sources catawiki` | robots.txt allows the search path; also check Catawiki's General Terms before storing. |
+| eBay API (`ebay_api`) | `scripts/scrape_sales.py --sources ebay_api` | **Only with eBay's express written permission.** See below. |
+| eBay website (`ebay`) | – | No: eBay's robots.txt disallows `/sch/`. |
+
+**eBay.** eBay's robots.txt blocks its search pages, so the official API is the
+only allowed programmatic route. Its
+[API License Agreement](https://developer.ebay.com/join/api-license-agreement)
+(3 Sep 2025) does not allow, without express written permission from eBay:
+storing eBay Content beyond temporary copies (s. 9(g), 3.1), using it to
+suggest or model prices (s. 9(e)), or using it to train algorithms or ML
+(s. 9(j)). A developer keyset alone does **not** grant this, so
+`scrape_sales.py` will not write `ebay_api` results to the database unless you
+pass `--ebay-data-permission`. Only use that flag once eBay has granted you a
+licence covering this use (for example through the Marketplace Insights
+application in the Developer Program). Until then you can still test your keys
+without storing anything:
 
 ```bash
-cp .env.example .env   # then edit .env
-
-# Sold items with realised prices (Marketplace Insights API – needs eBay approval)
-python scripts/scrape_sales.py --keywords "reloj bolsillo antiguo" --sources ebay_api
-
-# Active listings (Browse API – any keyset); stored with price_basis="asking"
-python scripts/scrape_sales.py --keywords "reloj bolsillo antiguo" --sources ebay_api --ebay-api-mode active
+cp .env.example .env   # fill in EBAY_CLIENT_ID (App ID) and EBAY_CLIENT_SECRET (Cert ID)
+python scripts/scrape_sales.py --keywords "reloj bolsillo" --sources ebay_api --ebay-api-mode active --dry-run
 ```
-
-Results are limited to eBay's *Antiques* category (`EBAY_CATEGORY_IDS=20081`)
-on the `EBAY_MARKETPLACE_ID` marketplace (default `EBAY_ES`).
 
 Generate text embeddings for imported sales:
 
@@ -590,7 +599,7 @@ pyAntiquePrices/
 ## Legal & ethical notes
 
 - **Privacy**: The LLM runs entirely locally via Ollama. No image data is sent to any external service.
-- **eBay data**: eBay is accessed through its official REST API (`ebay_api` source), subject to the eBay API License Agreement and your application's call limits. `robots.txt` on the API host is still checked before every request.
+- **eBay data**: accessed only through eBay's official API. Under the eBay API License Agreement, eBay data may not be stored, used to model prices or used to train models without eBay's written permission; the scraper enforces this with `--ebay-data-permission`.
 - **Web scraping**: The DuckDuckGo scraper respects `robots.txt` and applies a configurable crawl delay (default 3 s). It identifies itself with a descriptive `User-Agent`.
 - **Accuracy**: Appraisals are AI-generated estimates based on visual information only. They should be treated as a starting point, not a professional valuation. For high-value items, consult a certified appraiser.
 

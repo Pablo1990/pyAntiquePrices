@@ -516,11 +516,20 @@ class EbayApiError(RuntimeError):
 class EbayApiScraper(_BaseAuctionScraper):
     """Fetch eBay listings through eBay's official REST APIs.
 
-    This is the recommended way to get eBay data: eBay's ``robots.txt``
-    disallows automated crawling of its search pages, so the HTML-based
-    :class:`EbayEsScraper` usually returns nothing.  The API is the
-    sanctioned channel and is governed by the eBay API License Agreement and
-    per-application call limits instead.
+    eBay's ``robots.txt`` disallows automated crawling of its search pages,
+    so the HTML-based :class:`EbayEsScraper` returns nothing; the API is the
+    only permitted programmatic channel.
+
+    .. warning::
+       API use is governed by the eBay API License Agreement (version of
+       3 Sep 2025).  Without eBay's express written permission it forbids
+       storing eBay Content (s. 9(g); only temporary intermediate copies,
+       s. 3.1), using it to suggest or model prices (s. 9(e)) and using it
+       to train algorithms / machine learning (s. 9(j)).  Building a
+       persistent price database for appraisal or model training therefore
+       requires a separate data licence from eBay.  ``scripts/scrape_sales.py``
+       refuses to write eBay records to the database unless
+       ``--ebay-data-permission`` is given.
 
     Two modes are supported:
 
