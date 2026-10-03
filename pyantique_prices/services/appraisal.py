@@ -121,6 +121,7 @@ class AppraisalService:
         retrieval_session_factory=None,
         pricer=None,
         fallback_estimator=None,
+        live_market=None,
         base_currency: str = "EUR",
         min_comparables_for_model: int = 6,
         min_comparables_for_confidence: int = 10,
@@ -134,6 +135,10 @@ class AppraisalService:
         self.retrieval_session_factory = retrieval_session_factory
         self.pricer = pricer
         self.fallback_estimator = fallback_estimator
+        # Live marketplace lookups (e.g. EbayLiveListings). Results are shown
+        # in ``live_market_listings`` only – never used as comparables, for
+        # pricing, or persisted (eBay API License Agreement s. 9(e), 9(g)).
+        self.live_market = live_market
         self.base_currency = base_currency
         self.min_comparables_for_model = min_comparables_for_model
         self.min_comparables_for_confidence = min_comparables_for_confidence
@@ -164,6 +169,7 @@ class AppraisalService:
             "currency": currency,
             "candidate_count": 0,
             "usable_comparable_count": 0,
+            "live_market_listings": None,
         }
 
         if self.analyzer:
@@ -214,6 +220,15 @@ class AppraisalService:
             except Exception as exc:  # noqa: BLE001
                 logger.warning("Comparable retrieval failed: %s", exc)
                 result["warnings"].append(f"Comparable retrieval failed: {exc}")
+
+        if self.live_market is not None:
+            try:
+                result["live_market_listings"] = self.live_market.search(
+                    result.get("identification"), context=context
+                )
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("Live marketplace lookup failed: %s", exc)
+                result["warnings"].append(f"Live eBay lookup failed: {exc}")
 
         n_comparables = len(result["comparables"])
         if n_comparables == 0:

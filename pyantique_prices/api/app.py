@@ -33,11 +33,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         min_comparables_for_model=settings.min_comparables_for_model,
         min_comparables_for_confidence=settings.min_comparables_for_confidence,
     )
+    from pyantique_prices.services.live_market import EbayLiveListings
     service = AppraisalService(
         analyzer=analyzer,
         retrieval_session_factory=session_factory,
         pricer=pricer,
         fallback_estimator=LegacyWebFallbackEstimator(model=settings.ollama_vision_model),
+        live_market=EbayLiveListings.from_settings(),
         base_currency=settings.base_currency,
         min_comparables_for_model=settings.min_comparables_for_model,
         min_comparables_for_confidence=settings.min_comparables_for_confidence,
