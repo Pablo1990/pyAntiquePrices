@@ -432,7 +432,7 @@ def _format_appraisal(result: dict) -> str:
         lines.extend(live_lines[1:])
         lines.append("")
 
-    lines.append("LEGACY PRICE ESTIMATE")
+    lines.append("PRICE ESTIMATE")
     lines.append("-" * 43)
     if valuation and result.get("valuation_available"):
         lines.append(
@@ -448,6 +448,22 @@ def _format_appraisal(result: dict) -> str:
     else:
         lines.append("No valuation available.")
     lines.append("")
+
+    from pyantique_prices.deals import format_deal
+    from pyantique_prices.lookup import format_lookup_links
+
+    deal_lines = format_deal(result.get("deal"), result.get("currency", "EUR"))
+    if deal_lines:
+        lines.append(deal_lines[0])
+        lines.append("-" * 43)
+        lines.extend(deal_lines[1:])
+        lines.append("")
+    link_lines = format_lookup_links(result.get("lookup_links"))
+    if link_lines:
+        lines.append(link_lines[0].split(" (")[0])
+        lines.append("-" * 43)
+        lines.extend(link_lines[1:])
+        lines.append("")
 
     lines.append("CONFIDENCE")
     lines.append("-" * 43)

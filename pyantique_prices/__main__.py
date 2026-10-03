@@ -9,6 +9,14 @@ import sys
 def main(argv: list[str] | None = None) -> int:
     from .config import Settings
 
+    raw_args = sys.argv[1:] if argv is None else list(argv)
+    from .toolkit_cli import COMMANDS
+
+    if raw_args and raw_args[0] in COMMANDS:
+        from .toolkit_cli import main as toolkit_main
+
+        return toolkit_main(raw_args)
+
     settings = Settings()
     parser = argparse.ArgumentParser(
         prog="pyantique-prices",
@@ -79,7 +87,15 @@ def main(argv: list[str] | None = None) -> int:
         action="store_false",
         help="Disable chain-of-thought reasoning (faster, less accurate).",
     )
-    args = parser.parse_args(argv)
+    parser.add_argument("--asking-price", type=float, help="Asking price: adds a DEAL CHECK verdict.")
+    parser.add_argument("--shipping", type=float, default=0.0, help="Shipping you will pay (deal check).")
+    parser.add_argument("--buyer-premium", type=float, default=0.0, help="Auction buyer's premium, percent.")
+    parser.add_argument("--vat", type=float, default=0.0, help="VAT/import tax on the price, percent.")
+    parser.add_argument("--restoration", type=float, default=0.0, help="Expected restoration cost.")
+    parser.add_argument("--keep", action="store_true", help="Buying to keep: ignore selling costs.")
+    parser.add_argument("--resale-fee", type=float, default=0.0, help="Selling fee, percent of sale price.")
+    parser.add_argument("--json-out", metavar="FILE", help="Save the full appraisal as JSON (for `deal`/`ledger add`).")
+    args = parser.parse_args(raw_args)
 
     if args.cli or args.images:
         return _run_cli(args)
@@ -278,12 +294,31 @@ def _run_object_cli(args, images) -> int:
         f"{'='*60}\n"
         f"Analysing with vision model '{args.model}'...",
     )
-    result = service.appraise(images, context=context, currency=settings.base_currency)
+    extra = {}
+    if args.asking_price is not None:
+        extra = {
+            "asking_price": args.asking_price,
+            "deal_options": {
+                "shipping": args.shipping,
+                "buyer_premium_pct": args.buyer_premium,
+                "vat_pct": args.vat,
+                "restoration": args.restoration,
+                "for_resale": not args.keep,
+                "resale_fee_pct": args.resale_fee,
+            },
+        }
+    result = service.appraise(images, context=context, currency=settings.base_currency, **extra)
     if db_warning:
         result.setdefault("warnings", []).append(db_warning)
     if pricing_warning:
         result.setdefault("warnings", []).append(pricing_warning)
     print(_format_object_result(result))
+    if args.json_out:
+        import json
+
+        with open(args.json_out, "w", encoding="utf-8") as handle:
+            json.dump(result, handle, indent=2, ensure_ascii=False, default=str)
+        print(f"\nSaved appraisal to {args.json_out}")
     return 0
 
 
@@ -310,6 +345,8 @@ def _format_candidates(candidates) -> str:
 
 
 def _format_object_result(result: dict) -> str:
+    from pyantique_prices.deals import format_deal
+    from pyantique_prices.lookup import format_lookup_links
     from pyantique_prices.services.live_market import format_live_listings
 
     identification = result.get("identification") or {}
@@ -366,7 +403,7 @@ def _format_object_result(result: dict) -> str:
     if live_lines:
         lines.extend(live_lines)
         lines.append("")
-    lines.append("LEGACY PRICE ESTIMATE")
+    lines.append("PRICE ESTIMATE")
     if valuation:
         label = (
             "Estimated market value"
@@ -382,6 +419,14 @@ def _format_object_result(result: dict) -> str:
     else:
         lines.append("No valuation available.")
     lines.append("")
+    deal_lines = format_deal(result.get("deal"), result.get("currency", "EUR"))
+    if deal_lines:
+        lines.extend(deal_lines)
+        lines.append("")
+    link_lines = format_lookup_links(result.get("lookup_links"))
+    if link_lines:
+        lines.extend(link_lines)
+        lines.append("")
     lines.append("CONFIDENCE")
     lines.append(
         f"Identification confidence: {result.get('identification_confidence', 0.0) * 100:.0f}%"
