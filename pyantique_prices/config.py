@@ -4,6 +4,40 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass, field
+from pathlib import Path
+
+_PROJECT_ROOT = Path(__file__).resolve().parent.parent
+
+
+def load_dotenv(*paths: Path) -> None:
+    """Load ``KEY=VALUE`` lines from ``.env`` files into ``os.environ``.
+
+    Looks in the current directory and the project root by default.  Values
+    already set in the real environment are never overwritten, so an
+    ``export`` in the shell always wins over the file.
+    """
+    candidates = paths or (Path.cwd() / ".env", _PROJECT_ROOT / ".env")
+    seen: set[Path] = set()
+    for path in candidates:
+        path = path.resolve()
+        if path in seen or not path.is_file():
+            continue
+        seen.add(path)
+        for raw in path.read_text(encoding="utf-8").splitlines():
+            line = raw.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            if line.startswith("export "):
+                line = line[len("export "):]
+            key, _, value = line.partition("=")
+            key, value = key.strip(), value.strip()
+            if len(value) >= 2 and value[0] == value[-1] and value[0] in "'\"":
+                value = value[1:-1]
+            if key and key not in os.environ:
+                os.environ[key] = value
+
+
+load_dotenv()
 
 
 @dataclass

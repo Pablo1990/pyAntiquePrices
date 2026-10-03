@@ -411,11 +411,13 @@ python scripts/import_sales.py data/sales.csv
 
 Or populate the DB directly from eBay's official API (recommended over HTML
 scraping, which eBay's `robots.txt` disallows). Create a keyset at
-<https://developer.ebay.com/my/keys> and export your credentials (other
-`EBAY_*` settings are listed in `.env.example`):
+<https://developer.ebay.com/my/keys>, then copy `.env.example` to `.env`
+(git-ignored, loaded automatically) and fill in `EBAY_CLIENT_ID` (your
+**App ID**) and `EBAY_CLIENT_SECRET` (your **Cert ID**). The Dev ID is not
+needed.
 
 ```bash
-export EBAY_CLIENT_ID=...  EBAY_CLIENT_SECRET=...
+cp .env.example .env   # then edit .env
 
 # Sold items with realised prices (Marketplace Insights API – needs eBay approval)
 python scripts/scrape_sales.py --keywords "reloj bolsillo antiguo" --sources ebay_api
