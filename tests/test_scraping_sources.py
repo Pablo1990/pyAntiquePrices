@@ -416,3 +416,49 @@ class TestEbayApiScraper:
     def test_invalid_mode(self):
         with pytest.raises(ValueError):
             EbayApiScraper(mode="bogus", client_id="a", client_secret="b")
+
+
+# ---------------------------------------------------------------------------
+# robots.txt fetching (uses our session / User-Agent, not urllib's default)
+# ---------------------------------------------------------------------------
+
+class TestRobotsFetching:
+    def _scraper(self, status: int = 200, text: str = "", exc: Exception | None = None):
+        scraper = LibraryOfCongressScraper(crawl_delay=0)
+        scraper._session = MagicMock()
+        if exc is not None:
+            scraper._session.get.side_effect = exc
+        else:
+            resp = MagicMock()
+            resp.status_code = status
+            resp.text = text
+            scraper._session.get.return_value = resp
+        return scraper
+
+    def test_parses_rules_with_own_session(self):
+        s = self._scraper(200, "User-agent: *\nDisallow: /private\n")
+        assert s._is_allowed("/preservation") is True
+        assert s._is_allowed("/private/x") is False
+        url = s._session.get.call_args[0][0]
+        assert url == "https://www.loc.gov/robots.txt"
+
+    def test_404_means_allow_all(self):
+        assert self._scraper(404)._is_allowed("/anything") is True
+
+    def test_403_means_disallow_all(self):
+        s = self._scraper(403)
+        assert s._is_allowed("/anything") is False
+        assert "403" in s._robots_status
+
+    def test_server_error_disallows(self):
+        assert self._scraper(503)._is_allowed("/anything") is False
+
+    def test_network_error_disallows(self):
+        import requests
+        s = self._scraper(exc=requests.ConnectionError("boom"))
+        assert s._is_allowed("/anything") is False
+
+    def test_robots_fetched_once(self):
+        s = self._scraper(200, "User-agent: *\nAllow: /\n")
+        s._is_allowed("/a"); s._is_allowed("/b")
+        assert s._session.get.call_count == 1

@@ -61,6 +61,7 @@ class _BaseAuctionScraper:
             }
         )
         self._robots: Optional[urllib.robotparser.RobotFileParser] = None
+        self._robots_status: str = "rules"
         self._last_request_time: float = 0.0
 
     # ------------------------------------------------------------------
@@ -68,22 +69,69 @@ class _BaseAuctionScraper:
     # ------------------------------------------------------------------
 
     def _get_robots(self) -> urllib.robotparser.RobotFileParser:
+        """Fetch and parse ``robots.txt`` using our own session / User-Agent.
+
+        ``RobotFileParser.read()`` uses urllib's default ``Python-urllib``
+        agent, which many sites answer with 403 – and the parser then treats
+        the whole site as disallowed.  Fetching it ourselves avoids that
+        false negative while keeping the standard semantics:
+
+        * 2xx      → parse the rules
+        * 401/403  → everything disallowed (robots.txt is access-controlled)
+        * other 4xx (e.g. 404) → everything allowed (no robots.txt)
+        * 5xx / network error  → everything disallowed (be conservative)
+        """
         if self._robots is None:
             rp = urllib.robotparser.RobotFileParser()
             robots_url = urljoin(self.base_url, "/robots.txt")
             rp.set_url(robots_url)
+            self._robots_status = "unknown"
+            self._polite_wait()
             try:
-                self._polite_wait()
-                rp.read()
-                logger.debug("robots.txt fetched: %s", robots_url)
-            except Exception as exc:  # noqa: BLE001
-                logger.warning("Could not fetch robots.txt from %s: %s", robots_url, exc)
+                response = self._session.get(
+                    robots_url,
+                    timeout=_REQUEST_TIMEOUT,
+                    headers={"Accept": "text/plain,*/*;q=0.8"},
+                )
+            except requests.RequestException as exc:
+                logger.warning("Could not fetch %s: %s", robots_url, exc)
+                rp.disallow_all = True
+                self._robots_status = f"unreachable ({exc.__class__.__name__})"
+            else:
+                code = response.status_code
+                if 200 <= code < 300:
+                    rp.parse(response.text.splitlines())
+                    self._robots_status = "rules"
+                elif code in (401, 403):
+                    rp.disallow_all = True
+                    self._robots_status = f"HTTP {code} – access denied to robots.txt"
+                elif 400 <= code < 500:
+                    rp.allow_all = True
+                    self._robots_status = f"HTTP {code} – no robots.txt"
+                else:
+                    rp.disallow_all = True
+                    self._robots_status = f"HTTP {code} – server error"
+                logger.debug("robots.txt %s: %s", robots_url, self._robots_status)
+            finally:
+                self._last_request_time = time.monotonic()
+            rp.modified()  # mark as read so can_fetch() evaluates the rules
             self._robots = rp
         return self._robots
 
     def _is_allowed(self, path: str) -> bool:
         rp = self._get_robots()
-        return rp.can_fetch(_USER_AGENT, urljoin(self.base_url, path))
+        allowed = rp.can_fetch(_USER_AGENT, urljoin(self.base_url, path))
+        if not allowed:
+            status = getattr(self, "_robots_status", "rules")
+            reason = (
+                "a Disallow rule matches"
+                if status == "rules"
+                else f"robots.txt not usable: {status}"
+            )
+            logger.info(
+                "%s: %s blocked by robots.txt (%s).", self.base_url, path, reason
+            )
+        return allowed
 
     def _crawl_delay_from_robots(self) -> float:
         rp = self._get_robots()
@@ -394,19 +442,21 @@ class LibraryOfCongressScraper(_BaseAuctionScraper):
     base_url = "https://www.loc.gov"
     source_name = "loc"
 
-    _PRESERVATION_PATH = "/preservation"
+    # The path actually requested below – this is what must be checked
+    # against robots.txt (loc.gov currently disallows /search for all agents).
+    _SEARCH_PATH = "/search"
 
     def scrape(self, keywords: str, max_results: int = 50) -> list[dict]:
-        if not self._is_allowed(self._PRESERVATION_PATH):
+        if not self._is_allowed(self._SEARCH_PATH):
             logger.warning(
-                "LoC robots.txt disallows %s – skipping.", self._PRESERVATION_PATH
+                "LoC robots.txt disallows %s – skipping.", self._SEARCH_PATH
             )
             return []
 
         self.crawl_delay = max(self.crawl_delay, self._crawl_delay_from_robots())
 
         search_url = (
-            f"{self.base_url}/search"
+            f"{self.base_url}{self._SEARCH_PATH}"
             f"?q={quote_plus(keywords)}&fa=subject_headings%3Apreservation"
         )
         html = self._fetch(search_url)

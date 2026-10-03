@@ -18,14 +18,14 @@ Usage
 -----
 .. code-block:: bash
 
-    # Scrape all sources for a keyword (dry-run, no DB write)
+    # Scrape the default sources (ebay_api, catawiki) – dry-run, no DB write
     python scripts/scrape_sales.py --keywords "reloj bolsillo antiguo" --dry-run
 
-    # Scrape all sources and save to the default database
+    # Scrape the default sources and save to the default database
     python scripts/scrape_sales.py --keywords "reloj bolsillo antiguo"
 
     # Scrape only specific sources
-    python scripts/scrape_sales.py --keywords "porcelana" --sources ebay catawiki
+    python scripts/scrape_sales.py --keywords "porcelana" --sources ebay_api catawiki
 
     # Limit results per source
     python scripts/scrape_sales.py --keywords "plata" --max-results 20
@@ -78,6 +78,12 @@ _SCRAPERS = {
     "aic": AICScraper,
     "loc": LibraryOfCongressScraper,
 }
+
+# Sources run when --sources is not given: the ones that return prices and
+# are permitted by robots.txt.  "ebay" (HTML) is blocked by eBay's
+# robots.txt, and "aic"/"loc" only yield price-less reference records, so
+# they are opt-in.
+_DEFAULT_SOURCES = ["ebay_api", "catawiki"]
 
 
 # ---------------------------------------------------------------------------
@@ -181,8 +187,12 @@ def _build_parser() -> argparse.ArgumentParser:
         "--sources",
         nargs="+",
         choices=list(_SCRAPERS),
-        default=list(_SCRAPERS),
-        help="Which sources to scrape. Defaults to all.",
+        default=_DEFAULT_SOURCES,
+        help=(
+            "Which sources to scrape (default: %(default)s). 'ebay' is the "
+            "HTML scraper, blocked by eBay's robots.txt – use 'ebay_api'. "
+            "'aic' and 'loc' return reference records without prices."
+        ),
     )
     parser.add_argument(
         "--max-results",
