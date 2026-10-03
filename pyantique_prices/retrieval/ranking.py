@@ -110,16 +110,57 @@ def object_type_similarity(query: dict, sale: dict) -> float:
     return _match_fraction(list(_tokenize(query_text)), list(_tokenize(sale_text)))
 
 
+MIN_CANDIDATE_CONFIDENCE = 0.3
+
+
+def _confident_candidate_names(value: Any) -> list[str]:
+    """Candidate names, dropping low-confidence guesses (they cause false matches)."""
+    if not isinstance(value, list):
+        return _candidate_names(value)
+    names = []
+    for item in value:
+        if isinstance(item, dict):
+            conf = item.get("confidence")
+            if isinstance(conf, (int, float)) and conf < MIN_CANDIDATE_CONFIDENCE:
+                continue
+        name = _normalized_text(item)
+        if name:
+            names.append(name)
+    return names
+
+
+def _name_similarity(query_names: list[str], sale_names: list[str]) -> float:
+    """Best fuzzy match between name lists: exact, containment, token overlap.
+
+    "meissen" vs "meissen porcelain manufactory" must match; exact-string
+    comparison would score it 0.
+    """
+    best = 0.0
+    for left in query_names:
+        for right in sale_names:
+            if not left or not right:
+                continue
+            if left == right:
+                return 1.0
+            if left in right or right in left:
+                best = max(best, 0.85)
+                continue
+            lt, rt = _tokenize(left), _tokenize(right)
+            if lt and rt:
+                best = max(best, len(lt & rt) / max(len(lt), len(rt)))
+    return best
+
+
 def manufacturer_similarity(query: dict, sale: dict) -> float:
-    return _match_fraction(
-        _candidate_names(query.get("manufacturer_candidates")),
+    return _name_similarity(
+        _confident_candidate_names(query.get("manufacturer_candidates")),
         _as_list(sale.get("manufacturer")),
     )
 
 
 def artist_similarity(query: dict, sale: dict) -> float:
-    return _match_fraction(
-        _candidate_names(query.get("artist_candidates")),
+    return _name_similarity(
+        _confident_candidate_names(query.get("artist_candidates")),
         _as_list(sale.get("artist")),
     )
 
@@ -195,37 +236,99 @@ def marks_similarity(query: dict, sale: dict) -> float:
     return _match_fraction(query_marks, sale_marks)
 
 
-def explain_structured_similarity(query: dict, sale: dict) -> tuple[float, list[str]]:
-    scores = {
-        "same object type": object_type_similarity(query, sale),
-        "same manufacturer": manufacturer_similarity(query, sale),
-        "same artist": artist_similarity(query, sale),
-        "same period": period_similarity(query, sale),
-        "similar materials": material_similarity(query, sale),
-        "same country": country_similarity(query, sale),
-        "similar condition": condition_similarity(query, sale),
-        "similar dimensions": dimensions_similarity(query, sale),
-        "similar manufacturer mark": marks_similarity(query, sale),
+_FIELD_LABELS = {
+    "object_type": "same object type",
+    "manufacturer": "same manufacturer",
+    "artist": "same artist",
+    "period": "same period",
+    "material": "similar materials",
+    "country": "same country",
+    "condition": "similar condition",
+    "dimensions": "similar dimensions",
+    "marks": "similar manufacturer mark",
+}
+
+
+def _known_fields(query: dict, sale: dict) -> set[str]:
+    """Fields for which BOTH sides carry information.
+
+    A missing value is *unknown*, not a mismatch: scoring it 0 would punish
+    sales (or photos) for sparse metadata and bury the best comparables.
+    """
+    known = set()
+    if _normalized_text(query.get("object_type")) and _normalized_text(sale.get("object_type")):
+        known.add("object_type")
+    if _confident_candidate_names(query.get("manufacturer_candidates")) and _as_list(
+        sale.get("manufacturer")
+    ):
+        known.add("manufacturer")
+    if _confident_candidate_names(query.get("artist_candidates")) and _as_list(
+        sale.get("artist")
+    ):
+        known.add("artist")
+    q_period = (
+        query.get("estimated_year_start") is not None
+        or _normalized_text(query.get("period") or query.get("likely_period"))
+    )
+    if q_period and _normalized_text(sale.get("period")):
+        known.add("period")
+    if _as_list(query.get("materials")) and _as_list(sale.get("materials") or sale.get("material")):
+        known.add("material")
+    if _normalized_text(query.get("country")) and _normalized_text(sale.get("country")):
+        known.add("country")
+    if _normalized_text(query.get("condition")) and _normalized_text(sale.get("condition")):
+        known.add("condition")
+    if any(
+        isinstance(query.get(f), (int, float)) and isinstance(sale.get(f), (int, float))
+        and query[f] > 0 and sale[f] > 0
+        for f in ("height", "width", "depth", "diameter", "weight")
+    ):
+        known.add("dimensions")
+    if [m for m in (query.get("marks") or []) if isinstance(m, dict) and (m.get("normalized_text") or m.get("text"))] and _as_list(
+        sale.get("marks")
+    ):
+        known.add("marks")
+    return known
+
+
+def explain_structured_similarity(
+    query: dict,
+    sale: dict,
+    weights: dict[str, float] | None = None,
+) -> tuple[float, list[str]]:
+    """Weighted structured similarity over fields known on both sides.
+
+    The result is the weighted mean over known fields, scaled by
+    ``0.5 + 0.5 * coverage`` (share of total weight that was comparable) so a
+    perfect match on one field does not outrank a strong match on many.
+    """
+    weights = {**DEFAULT_STRUCTURED_WEIGHTS, **(weights or {})}
+    scorers = {
+        "object_type": object_type_similarity,
+        "manufacturer": manufacturer_similarity,
+        "artist": artist_similarity,
+        "period": period_similarity,
+        "material": material_similarity,
+        "country": country_similarity,
+        "condition": condition_similarity,
+        "dimensions": dimensions_similarity,
+        "marks": marks_similarity,
     }
+    known = _known_fields(query, sale)
+    total_weight = sum(weights.get(k, 0.0) for k in scorers)
+    known_weight = sum(weights.get(k, 0.0) for k in known)
+    if not known or known_weight <= 0 or total_weight <= 0:
+        return 0.0, []
+
     weighted_total = 0.0
-    total_weight = 0.0
-    for label, score in scores.items():
-        weight_key = {
-            "same object type": "object_type",
-            "same manufacturer": "manufacturer",
-            "same artist": "artist",
-            "same period": "period",
-            "similar materials": "material",
-            "same country": "country",
-            "similar condition": "condition",
-            "similar dimensions": "dimensions",
-            "similar manufacturer mark": "marks",
-        }[label]
-        weight = DEFAULT_STRUCTURED_WEIGHTS.get(weight_key, 0.0)
-        weighted_total += score * weight
-        total_weight += weight
-    reasons = [label for label, score in scores.items() if score >= 0.6]
-    structured = weighted_total / total_weight if total_weight else 0.0
+    reasons = []
+    for key in known:
+        score = scorers[key](query, sale)
+        weighted_total += score * weights.get(key, 0.0)
+        if score >= 0.6:
+            reasons.append(_FIELD_LABELS[key])
+    coverage = known_weight / total_weight
+    structured = (weighted_total / known_weight) * (0.5 + 0.5 * coverage)
     return structured, reasons
 
 

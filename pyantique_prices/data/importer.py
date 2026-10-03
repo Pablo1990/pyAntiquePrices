@@ -21,6 +21,7 @@ class ImportResult:
     duplicates: int = 0
     invalid_prices: int = 0
     unsupported_currencies: int = 0
+    outliers_flagged: int = 0
 
 
 SUPPORTED_CURRENCIES = {"EUR", "GBP", "USD", "CHF", "CAD", "AUD", "JPY"}
@@ -123,4 +124,10 @@ def import_csv(path: str | Path, session, base_currency: str = "EUR") -> ImportR
             result.rows_inserted += 1
 
     session.commit()
+    try:
+        from .outliers import flag_outliers
+
+        result.outliers_flagged = flag_outliers(session)
+    except Exception as exc:  # noqa: BLE001 - flagging must never lose an import
+        logger.warning("Outlier flagging failed: %s", exc)
     return result

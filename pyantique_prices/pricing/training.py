@@ -60,6 +60,8 @@ def prepare_training_records(sales: list[Any]) -> list[dict[str, Any]]:
             continue
         if getattr(sale, "usable_for_training", True) is False:
             continue
+        if getattr(sale, "outlier_flag", False) is True:
+            continue
         key = _sale_key(
             {
                 "source_url": getattr(sale, "source_url", None),
