@@ -8,7 +8,6 @@ import pytest
 
 from pyantique_prices.scraping.sources import (
     AICScraper,
-    CatawikiScraper,
     EbayApiError,
     EbayApiScraper,
     EbayEsScraper,
@@ -140,47 +139,6 @@ class TestEbayEsScraper:
         result = scraper.scrape("reloj", max_results=5)
         assert len(result) <= 5
 
-
-# ---------------------------------------------------------------------------
-# CatawikiScraper
-# ---------------------------------------------------------------------------
-
-class TestCatawikiScraper:
-    def _make_scraper(self, allowed: bool = True) -> CatawikiScraper:
-        scraper = CatawikiScraper(crawl_delay=0)
-        mock_rp = MagicMock()
-        mock_rp.can_fetch.return_value = allowed
-        mock_rp.crawl_delay.return_value = None
-        scraper._robots = mock_rp
-        return scraper
-
-    def test_skips_when_disallowed(self):
-        scraper = self._make_scraper(allowed=False)
-        result = scraper.scrape("porcelana")
-        assert result == []
-
-    def test_returns_empty_on_fetch_failure(self):
-        scraper = self._make_scraper(allowed=True)
-        scraper._fetch = MagicMock(return_value=None)
-        result = scraper.scrape("porcelana")
-        assert result == []
-
-    def test_parses_listings(self):
-        html = """
-        <html><body>
-          <article class="lot-card">
-            <h3 class="lot-card__title">Art Deco bronze lamp</h3>
-            <span class="lot-card__price">€ 340,00</span>
-            <time datetime="2022-09-05T18:00:00Z">5 Sep 2022</time>
-            <a href="/en/l/123456-art-deco-bronze-lamp">View</a>
-          </article>
-        </body></html>
-        """
-        items = CatawikiScraper._parse_listings(html)
-        assert len(items) == 1
-        assert "Art Deco" in items[0]["title"]
-        assert items[0]["currency"] == "EUR"
-        assert items[0]["auction_house"] == "Catawiki"
 
 
 # ---------------------------------------------------------------------------
@@ -508,6 +466,8 @@ class TestScrapeSalesEbayGuard:
             "select count(*) from historical_sales").fetchone()[0]
         assert n == 1
 
-    def test_ebay_api_not_in_defaults(self):
+    def test_sources_required_and_catawiki_removed(self):
         import scripts.scrape_sales as ss
-        assert "ebay_api" not in ss._DEFAULT_SOURCES
+        assert "catawiki" not in ss._SCRAPERS
+        with pytest.raises(SystemExit):
+            ss._build_parser().parse_args(["--keywords", "x"])

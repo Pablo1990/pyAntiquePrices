@@ -415,27 +415,34 @@ The pipeline needs a database of past prices. Sources and what their terms allow
 
 | Source | How | Can it be stored and used for pricing / training? |
 |---|---|---|
-| Your own or licensed data (auction results you have rights to, a paid price database whose licence allows it, your lab's records) | `scripts/import_sales.py data/sales.csv` | Yes, within that licence. **Recommended.** |
-| Catawiki closed lots | `scripts/scrape_sales.py --sources catawiki` | robots.txt allows the search path; also check Catawiki's General Terms before storing. |
-| eBay API (`ebay_api`) | `scripts/scrape_sales.py --sources ebay_api` | **Only with eBay's express written permission.** See below. |
-| eBay website (`ebay`) | – | No: eBay's robots.txt disallows `/sch/`. |
+| Your own or licensed data (auction results you have rights to, a paid price database whose licence allows it, your own records) | `scripts/import_sales.py data/sales.csv` | Yes, within that licence. **This is the way to fill the DB.** |
+| eBay API | live lookup at appraisal time (below) | Shown to you per query, **never stored**. Storing needs eBay's written permission (`scrape_sales.py --sources ebay_api --ebay-data-permission`). |
+| eBay website | – | No: eBay's robots.txt disallows `/sch/`. |
+| Catawiki | – | No: General Terms (15 Sep 2026), Art. 8: "Scraping our website is not allowed." Scraper removed. |
 
-**eBay.** eBay's robots.txt blocks its search pages, so the official API is the
-only allowed programmatic route. Its
+**Why eBay data isn't stored.** The eBay
 [API License Agreement](https://developer.ebay.com/join/api-license-agreement)
 (3 Sep 2025) does not allow, without express written permission from eBay:
 storing eBay Content beyond temporary copies (s. 9(g), 3.1), using it to
 suggest or model prices (s. 9(e)), or using it to train algorithms or ML
-(s. 9(j)). A developer keyset alone does **not** grant this, so
-`scrape_sales.py` will not write `ebay_api` results to the database unless you
-pass `--ebay-data-permission`. Only use that flag once eBay has granted you a
-licence covering this use (for example through the Marketplace Insights
-application in the Developer Program). Until then you can still test your keys
-without storing anything:
+(s. 9(j)). A developer keyset alone does not grant this.
+
+### Live eBay listings at appraisal time
+
+With your eBay keys in `.env`, every appraisal (CLI, GUI and REST API) runs
+one eBay Browse API search built from the identification (maker, object type,
+material…) and shows the matching listings, with links to eBay, in a separate
+**LIVE eBAY LISTINGS** section (`live_market_listings` in the API response).
+These results are:
+
+- fetched for that request only and kept in memory (no database, cache or file);
+- never added to the comparables, the valuation, the pricing model or training data;
+- current asking prices, not sale prices (set `EBAY_LIVE_MODE=sold` only if eBay
+  has approved your app for the Marketplace Insights API).
 
 ```bash
 cp .env.example .env   # fill in EBAY_CLIENT_ID (App ID) and EBAY_CLIENT_SECRET (Cert ID)
-python scripts/scrape_sales.py --keywords "reloj bolsillo" --sources ebay_api --ebay-api-mode active --dry-run
+# optional: EBAY_LIVE_LISTINGS=false to turn it off, EBAY_LIVE_MAX_RESULTS=10
 ```
 
 Generate text embeddings for imported sales:
@@ -599,7 +606,8 @@ pyAntiquePrices/
 ## Legal & ethical notes
 
 - **Privacy**: The LLM runs entirely locally via Ollama. No image data is sent to any external service.
-- **eBay data**: accessed only through eBay's official API. Under the eBay API License Agreement, eBay data may not be stored, used to model prices or used to train models without eBay's written permission; the scraper enforces this with `--ebay-data-permission`.
+- **eBay data**: accessed only through eBay's official API, fetched live per appraisal and shown with links to eBay. It is never stored, used to compute the valuation or used for training, in line with the eBay API License Agreement (s. 9(e), 9(g), 9(j)).
+- **Catawiki**: not used; its General Terms forbid scraping.
 - **Web scraping**: The DuckDuckGo scraper respects `robots.txt` and applies a configurable crawl delay (default 3 s). It identifies itself with a descriptive `User-Agent`.
 - **Accuracy**: Appraisals are AI-generated estimates based on visual information only. They should be treated as a starting point, not a professional valuation. For high-value items, consult a certified appraiser.
 

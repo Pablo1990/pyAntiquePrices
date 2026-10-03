@@ -98,6 +98,17 @@ class Settings:
     ebay_environment: str = field(
         default_factory=lambda: os.getenv("EBAY_ENVIRONMENT", "production")
     )
+    # Live, per-appraisal eBay listings (shown, never stored). Needs the keys above.
+    ebay_live_listings: bool = field(
+        default_factory=lambda: os.getenv("EBAY_LIVE_LISTINGS", "true").lower() == "true"
+    )
+    ebay_live_max_results: int = field(
+        default_factory=lambda: int(os.getenv("EBAY_LIVE_MAX_RESULTS", "10"))
+    )
+    # "active" = Browse API (any keyset); "sold" = Marketplace Insights (approval needed)
+    ebay_live_mode: str = field(
+        default_factory=lambda: os.getenv("EBAY_LIVE_MODE", "active").lower()
+    )
     # 20081 = eBay "Antiques" top-level category; empty string = no filter.
     ebay_category_ids: str = field(
         default_factory=lambda: os.getenv("EBAY_CATEGORY_IDS", "20081")

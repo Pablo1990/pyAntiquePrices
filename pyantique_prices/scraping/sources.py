@@ -5,7 +5,8 @@ Supported sources
 * eBay API – official eBay REST APIs (Marketplace Insights / Browse);
   the recommended eBay source, see :class:`EbayApiScraper`
 * eBay.es  – completed/sold listings via HTML (usually blocked by robots.txt)
-* Catawiki – closed lots (2021-present)
+* (Catawiki was removed: its General Terms, valid from 15 Sep 2026, Art. 8,
+  state "Scraping our website is not allowed".)
 * AIC      – American Institute for Conservation references
 * LoC      – Library of Congress, Preservation resources
 
@@ -258,89 +259,6 @@ class EbayEsScraper(_BaseAuctionScraper):
                     "currency": currency,
                     "sale_date": sale_date.isoformat() if sale_date else None,
                     "auction_house": "eBay.es",
-                    "source_url": source_url,
-                    "price_basis": "realized",
-                }
-            )
-
-        return items
-
-
-# ---------------------------------------------------------------------------
-# Catawiki – Closed lots
-# ---------------------------------------------------------------------------
-
-class CatawikiScraper(_BaseAuctionScraper):
-    """Scrape Catawiki closed auction lots.
-
-    Catawiki's public search is used with ``status=closed`` to find historical
-    sold lots.  robots.txt compliance is enforced before every path.
-    """
-
-    base_url = "https://www.catawiki.com"
-    source_name = "catawiki"
-
-    _SEARCH_PATH = "/en/s"
-
-    def scrape(self, keywords: str, max_results: int = 50) -> list[dict]:
-        if not self._is_allowed(self._SEARCH_PATH):
-            logger.warning(
-                "Catawiki robots.txt disallows %s – skipping.", self._SEARCH_PATH
-            )
-            return []
-
-        self.crawl_delay = max(self.crawl_delay, self._crawl_delay_from_robots())
-
-        url = (
-            f"{self.base_url}{self._SEARCH_PATH}"
-            f"?q={quote_plus(keywords)}&status=closed"
-        )
-        html = self._fetch(url)
-        if not html:
-            return []
-
-        results = self._parse_listings(html)
-        logger.info("Catawiki: scraped %d listings for '%s'", len(results), keywords)
-        return results[:max_results]
-
-    @staticmethod
-    def _parse_listings(html: str) -> list[dict]:
-        soup = BeautifulSoup(html, "html.parser")
-        items: list[dict] = []
-
-        # Catawiki renders lots inside <li data-lot-id="…"> elements or
-        # article tags depending on the page version – we try both.
-        cards = soup.select("article.lot-card, li[data-lot-id]")
-        for card in cards:
-            title_tag = card.select_one("[class*='lot-card__title'], h3, h2")
-            price_tag = card.select_one(
-                "[class*='lot-card__price'], [class*='hammer-price']"
-            )
-            date_tag = card.select_one("[class*='end-date'], time")
-            link_tag = card.select_one("a")
-
-            title = title_tag.get_text(strip=True) if title_tag else None
-            if not title:
-                continue
-
-            price_text = price_tag.get_text(strip=True) if price_tag else ""
-            price, currency = _parse_price(price_text)
-
-            date_text = date_tag.get("datetime") or (
-                date_tag.get_text(strip=True) if date_tag else ""
-            )
-            sale_date = _parse_date_loose(date_text)
-
-            href = link_tag.get("href", "") if link_tag else ""
-            source_url = urljoin("https://www.catawiki.com", href) if href else None
-
-            items.append(
-                {
-                    "title": title,
-                    "final_price": price,
-                    "currency": currency,
-                    "sale_date": sale_date.isoformat() if sale_date else None,
-                    "auction_house": "Catawiki",
                     "source_url": source_url,
                     "price_basis": "realized",
                 }
@@ -778,6 +696,9 @@ class EbayApiScraper(_BaseAuctionScraper):
             ),
             "source_url": item.get("itemWebUrl") or item.get("itemHref"),
             "price_basis": basis,
+            "image_url": (item.get("image") or {}).get("imageUrl"),
+            "condition": item.get("condition"),
+            "buying_options": item.get("buyingOptions") or [],
         }
 
 

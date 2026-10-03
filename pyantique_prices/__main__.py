@@ -215,11 +215,13 @@ def _run_object_cli(args, images) -> int:
         num_ctx=settings.ollama_num_ctx,
     )
     analyzer = MultiImageAnalyzer(client=client, mark_service=MarkAnalysisService())
+    from pyantique_prices.services.live_market import EbayLiveListings
     service = AppraisalService(
         analyzer=analyzer,
         retrieval_session_factory=session_factory,
         pricer=pricer,
         fallback_estimator=LegacyWebFallbackEstimator(model=args.model),
+        live_market=EbayLiveListings.from_settings(),
         base_currency=settings.base_currency,
         min_comparables_for_model=settings.min_comparables_for_model,
         min_comparables_for_confidence=settings.min_comparables_for_confidence,
@@ -263,6 +265,8 @@ def _extract_value(field):
 
 
 def _format_object_result(result: dict) -> str:
+    from pyantique_prices.services.live_market import format_live_listings
+
     identification = result.get("identification") or {}
     valuation = result.get("valuation") or {}
     marks = identification.get("marks") or []
@@ -304,6 +308,10 @@ def _format_object_result(result: dict) -> str:
             f"score={comparable.get('retrieval_score', 0.0):.3f}"
         )
     lines.append("")
+    live_lines = format_live_listings(result.get("live_market_listings"))
+    if live_lines:
+        lines.extend(live_lines)
+        lines.append("")
     lines.append("VALUATION")
     if valuation:
         label = "Estimated market value" if result.get("valuation_available") else "Reference-only estimate"

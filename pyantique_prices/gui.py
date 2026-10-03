@@ -226,11 +226,13 @@ class App(tk.Tk):
                     )
                 else:
                     raise
+            from pyantique_prices.services.live_market import EbayLiveListings
             service = AppraisalService(
                 analyzer=analyzer,
                 retrieval_session_factory=session_factory,
                 pricer=pricer,
                 fallback_estimator=LegacyWebFallbackEstimator(model=model),
+                live_market=EbayLiveListings.from_settings(),
                 base_currency=settings.base_currency,
                 min_comparables_for_model=settings.min_comparables_for_model,
                 min_comparables_for_confidence=settings.min_comparables_for_confidence,
@@ -385,6 +387,15 @@ def _format_appraisal(result: dict) -> str:
             f"score={comparable.get('retrieval_score', 0.0):.3f}"
         )
     lines.append("")
+
+    from pyantique_prices.services.live_market import format_live_listings
+
+    live_lines = format_live_listings(result.get("live_market_listings"))
+    if live_lines:
+        lines.append(live_lines[0])
+        lines.append("-" * 43)
+        lines.extend(live_lines[1:])
+        lines.append("")
 
     lines.append("VALUATION")
     lines.append("-" * 43)

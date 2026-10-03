@@ -8,7 +8,6 @@ Supported sources
                     from eBay – see ``--ebay-data-permission``.
 * eBay.es         – completed / sold listings via HTML (usually blocked by
                     eBay's robots.txt – prefer ``ebay_api``)
-* Catawiki        – closed lots
 * AIC             – American Institute for Conservation references
 * LoC             – Library of Congress preservation resources
 
@@ -20,17 +19,6 @@ Usage
 -----
 .. code-block:: bash
 
-    # Scrape the default sources (ebay_api, catawiki) – dry-run, no DB write
-    python scripts/scrape_sales.py --keywords "reloj bolsillo antiguo" --dry-run
-
-    # Scrape the default sources and save to the default database
-    python scripts/scrape_sales.py --keywords "reloj bolsillo antiguo"
-
-    # Scrape only specific sources
-    python scripts/scrape_sales.py --keywords "porcelana" --sources ebay_api catawiki
-
-    # Limit results per source
-    python scripts/scrape_sales.py --keywords "plata" --max-results 20
 
     # Check the eBay API connection without storing anything
     python scripts/scrape_sales.py --keywords "reloj bolsillo" --sources ebay_api --ebay-api-mode active --dry-run
@@ -38,8 +26,8 @@ Usage
     # Store eBay results – ONLY with written permission from eBay
     python scripts/scrape_sales.py --keywords "reloj bolsillo" --sources ebay_api --ebay-data-permission
 
-    # Use a custom database URL
-    python scripts/scrape_sales.py --keywords "mueble" --db-url sqlite:///./data/test.db
+    # Reference records (no prices) from AIC, into a custom database
+    python scripts/scrape_sales.py --keywords "mueble" --sources aic --db-url sqlite:///./data/test.db
 """
 
 from __future__ import annotations
@@ -60,7 +48,6 @@ from pyantique_prices.data.models import HistoricalSale
 from pyantique_prices.data.normalizer import normalize_price
 from pyantique_prices.scraping.sources import (
     AICScraper,
-    CatawikiScraper,
     EbayApiError,
     EbayApiScraper,
     EbayEsScraper,
@@ -76,16 +63,16 @@ logger = logging.getLogger("scrape_sales")
 _SCRAPERS = {
     "ebay_api": EbayApiScraper,
     "ebay": EbayEsScraper,
-    "catawiki": CatawikiScraper,
     "aic": AICScraper,
     "loc": LibraryOfCongressScraper,
 }
 
-# Sources run when --sources is not given: the ones that return prices and
-# are permitted by robots.txt.  "ebay" (HTML) is blocked by eBay's
-# robots.txt, and "aic"/"loc" only yield price-less reference records, so
-# they are opt-in.
-_DEFAULT_SOURCES = ["catawiki"]
+# No source runs by default: none of them can legally fill a price DB as-is.
+#   ebay_api – eBay API licence forbids storing data without written permission
+#   ebay     – eBay robots.txt disallows /sch/
+#   aic/loc  – reference records without prices (LoC /search is disallowed)
+# Catawiki was removed: its General Terms (15 Sep 2026, Art. 8) forbid scraping.
+# Fill the DB from data you hold rights to with scripts/import_sales.py.
 
 # Sources whose terms forbid storing their data without a separate licence.
 _EBAY_LICENSE_NOTICE = """\
@@ -209,9 +196,9 @@ def _build_parser() -> argparse.ArgumentParser:
         "--sources",
         nargs="+",
         choices=list(_SCRAPERS),
-        default=_DEFAULT_SOURCES,
+        required=True,
         help=(
-            "Which sources to scrape (default: %(default)s). 'ebay_api' "
+            "Which sources to scrape. 'ebay_api' "
             "only stores data with --ebay-data-permission. 'ebay' is the "
             "HTML scraper, blocked by eBay's robots.txt. 'aic' and 'loc' "
             "return reference records without prices."
