@@ -235,6 +235,8 @@ def _run_object_cli(args, images) -> int:
         num_ctx=settings.ollama_num_ctx,
         require_model=False,
     )
+    from pyantique_prices.services.live_market import EbayLiveListings
+
     service = AppraisalService(
         analyzer=analyzer,
         retrieval_session_factory=session_factory,
@@ -242,6 +244,7 @@ def _run_object_cli(args, images) -> int:
         image_embedding_provider=NullImageEmbeddingProvider(),
         pricer=pricer,
         fallback_estimator=LegacyWebFallbackEstimator(model=args.model),
+        live_market=EbayLiveListings.from_settings(),
         base_currency=settings.base_currency,
         min_comparables_for_model=settings.min_comparables_for_model,
         min_comparables_for_confidence=settings.min_comparables_for_confidence,
@@ -306,6 +309,8 @@ def _format_candidates(candidates) -> str:
 
 
 def _format_object_result(result: dict) -> str:
+    from pyantique_prices.services.live_market import format_live_listings
+
     identification = result.get("identification") or {}
     valuation = result.get("valuation") or {}
     marks = identification.get("marks") or []
@@ -356,6 +361,10 @@ def _format_object_result(result: dict) -> str:
             f"Price: {comparable.get('normalized_price')} {result.get('currency', 'EUR')}"
         )
     lines.append("")
+    live_lines = format_live_listings(result.get("live_market_listings"))
+    if live_lines:
+        lines.extend(live_lines)
+        lines.append("")
     lines.append("LEGACY PRICE ESTIMATE")
     if valuation:
         label = (

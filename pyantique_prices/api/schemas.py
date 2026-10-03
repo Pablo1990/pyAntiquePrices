@@ -22,3 +22,6 @@ class AppraiseResponse(BaseModel):
     currency: str = "EUR"
     candidate_count: int = 0
     usable_comparable_count: int = 0
+    # Live eBay listings fetched for this request only (not stored, not
+    # used for the valuation). See pyantique_prices/services/live_market.py.
+    live_market_listings: dict[str, Any] | None = None
