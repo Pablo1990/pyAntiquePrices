@@ -51,6 +51,8 @@ def _cmd_links(args) -> int:
         _identification_from_args(args),
         f"Extra keywords: {args.keywords}" if args.keywords else "",
         ebay_domain=args.ebay_domain or Settings().ebay_domain,
+        regions=[r.strip() for r in args.regions.split(",")] if args.regions else None,
+        categories=[c.strip() for c in args.category.split(",")] if args.category else None,
     )
     if not block["links"]:
         print("Give at least --object, --maker, --artist or --keywords.", file=sys.stderr)
@@ -195,6 +197,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--object"); p.add_argument("--subtype"); p.add_argument("--maker")
     p.add_argument("--artist"); p.add_argument("--material"); p.add_argument("--period")
     p.add_argument("--keywords", default=""); p.add_argument("--ebay-domain")
+    p.add_argument("--regions", help="Comma list: global,es,uk,fr,de,us or 'all' (default: global,es,uk)")
+    p.add_argument("--category", help="Comma list, e.g. watches,coins,books,art,ceramics (default: inferred)")
     p.add_argument("--json", action="store_true")
     p.set_defaults(func=_cmd_links)
 

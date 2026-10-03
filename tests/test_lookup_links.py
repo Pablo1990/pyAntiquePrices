@@ -69,3 +69,49 @@ def test_format_lists_every_link():
     block = build_lookup_links(IDENT, sites_file="")
     text = "\n".join(format_lookup_links(block))
     assert "RESEARCH LINKS" in text and "eBay - sold" in text
+
+
+def test_google_site_search_is_used_for_site_entries_and_is_encoded():
+    block = build_lookup_links(IDENT, sites_file="", regions=["all"])
+    bonhams = _by_id(block)["bonhams"]
+    qs = parse_qs(urlparse(bonhams["url"]).query)
+    assert qs["q"] == ["Omega pocket watch hunter case silver site:bonhams.com"]
+    assert bonhams["verified"] is False and _by_id(block)["catawiki"]["verified"] is True
+
+
+def test_regions_filter_sites():
+    es = {l["id"] for l in build_lookup_links(IDENT, sites_file="", regions=["es"])["links"]}
+    assert "todocoleccion" in es and "saleroom" not in es and "drouot" not in es
+    allr = {l["id"] for l in build_lookup_links(IDENT, sites_file="", regions=["all"])["links"]}
+    assert {"drouot", "saleroom", "heritage", "lot_tissimo"} <= allr
+
+
+def test_default_regions_and_env_override(monkeypatch):
+    default = {l["id"] for l in build_lookup_links(IDENT, sites_file="")["links"]}
+    assert "saleroom" in default and "drouot" not in default
+    monkeypatch.setenv("LOOKUP_REGIONS", "fr")
+    fr = {l["id"] for l in build_lookup_links(IDENT, sites_file="")["links"]}
+    assert "drouot" in fr and "todocoleccion" not in fr
+
+
+def test_category_sites_follow_the_object():
+    watch = {l["id"] for l in build_lookup_links(IDENT, sites_file="")["links"]}
+    assert "chrono24" in watch and "numista" not in watch and "abebooks" not in watch
+    coin = {l["id"] for l in build_lookup_links({"object_type": "silver coin"}, sites_file="", regions=["all"])["links"]}
+    assert "numista" in coin and "chrono24" not in coin
+    forced = {l["id"] for l in build_lookup_links({"object_type": "thing"}, sites_file="", categories=["books"])["links"]}
+    assert "abebooks" in forced
+
+
+def test_links_are_grouped_realised_first_and_formatter_groups():
+    block = build_lookup_links(IDENT, sites_file="", regions=["all"])
+    kinds = [l["kind"] for l in block["links"]]
+    assert kinds == sorted(kinds, key=["sold", "auction", "active", "retail", "reference", "images"].index)
+    text = "\n".join(format_lookup_links(block))
+    assert "Realised prices:" in text and "Triangulate" in text and "Images:" in text
+
+
+def test_user_site_entry_can_use_site_search(tmp_path):
+    f = tmp_path / "s.json"
+    f.write_text(json.dumps([{"id": "mine", "name": "Mine", "kind": "auction", "site": "example.org"}]))
+    assert "site%3Aexample.org" in _by_id(build_lookup_links(IDENT, sites_file=f))["mine"]["url"]
