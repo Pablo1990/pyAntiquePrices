@@ -129,6 +129,27 @@ def _data_quality_score(sale: dict) -> float:
     return sum(1 for item in checks if item) / len(checks)
 
 
+def _usable_sales_query(session, *, as_of=None, exclude_ids=None):
+    """Rows eligible as comparables: priced, usable, and not flagged outliers.
+
+    ``as_of`` restricts to sales strictly before that date (point-in-time
+    retrieval, used by backtests to avoid look-ahead); ``exclude_ids`` removes
+    specific rows (the held-out sale itself).
+    """
+    from pyantique_prices.data.models import HistoricalSale
+
+    query = session.query(HistoricalSale).filter(
+        HistoricalSale.normalized_price.is_not(None),
+        HistoricalSale.usable_for_training.is_not(False),
+        HistoricalSale.outlier_flag.is_not(True),
+    )
+    if as_of is not None:
+        query = query.filter(HistoricalSale.sale_date < as_of)
+    if exclude_ids:
+        query = query.filter(HistoricalSale.id.not_in(list(exclude_ids)))
+    return query
+
+
 def _build_query_image_embedding(query_image, image_embedding_provider):
     if query_image is None or image_embedding_provider is None:
         return None
@@ -146,11 +167,17 @@ class HybridComparableRetriever:
         text_embedding_provider=None,
         image_embedding_provider=None,
         signal_weights: dict[str, float] | None = None,
+        as_of=None,
+        exclude_ids=None,
     ) -> None:
         self.session = session
+        self.as_of = as_of
+        self.exclude_ids = exclude_ids
         self.identification = identification
         self.text_embedding_provider = text_embedding_provider
         self.image_embedding_provider = image_embedding_provider
+        # Populated by search(): sale dicts by id, so callers need no second scan.
+        self.sales_by_id: dict[str, dict] = {}
         self.signal_weights = dict(DEFAULT_SIGNAL_WEIGHTS)
         if signal_weights:
             self.signal_weights.update(signal_weights)
@@ -163,8 +190,6 @@ class HybridComparableRetriever:
         return _lexical_similarity(query_text, build_sale_search_document(sale))
 
     def search(self, query_text: str, query_image=None, top_k: int = 20) -> list[ComparableResult]:
-        from pyantique_prices.data.models import HistoricalSale
-
         query_embedding = []
         if self.text_embedding_provider is not None:
             query_embedding = _safe_float_list(self.text_embedding_provider.embed(query_text))
@@ -172,17 +197,14 @@ class HybridComparableRetriever:
             query_image,
             self.image_embedding_provider,
         )
-        rows = (
-            self.session.query(HistoricalSale)
-            .filter(
-                HistoricalSale.normalized_price.is_not(None),
-                HistoricalSale.usable_for_training.is_(True),
-            )
-            .all()
-        )
+        rows = _usable_sales_query(
+            self.session, as_of=self.as_of, exclude_ids=self.exclude_ids
+        ).all()
+        self.sales_by_id = {}
         results: list[ComparableResult] = []
         for row in rows:
             sale = _sale_to_dict(row)
+            self.sales_by_id[str(sale["id"])] = sale
             semantic_similarity = self._semantic_similarity(query_text, sale, query_embedding)
             structured_similarity, reasons = explain_structured_similarity(
                 self.identification,
@@ -233,10 +255,11 @@ def retrieve_comparables_details(
     text_embedding_provider=None,
     image_embedding_provider=None,
     query_image=None,
+    as_of=None,
+    exclude_ids=None,
 ) -> dict:
     """Retrieve and filter comparable sales, returning counts and results."""
-    from datetime import datetime, timedelta
-    from pyantique_prices.data.models import HistoricalSale
+    from datetime import timedelta
 
     query_text = build_search_document(identification)
     retriever = HybridComparableRetriever(
@@ -245,20 +268,14 @@ def retrieve_comparables_details(
         text_embedding_provider=text_embedding_provider,
         image_embedding_provider=image_embedding_provider,
         signal_weights=weights,
+        as_of=as_of,
+        exclude_ids=exclude_ids,
     )
     results = retriever.search(query_text, query_image=query_image, top_k=max(top_k, 200))
 
-    sales_by_id = {
-        str(row.id): _sale_to_dict(row)
-        for row in session.query(HistoricalSale)
-        .filter(
-            HistoricalSale.normalized_price.is_not(None),
-            HistoricalSale.usable_for_training.is_(True),
-        )
-        .all()
-    }
+    sales_by_id = retriever.sales_by_id  # same scan: no second full-table read
     candidate_count = len(sales_by_id)
-    cutoff = datetime.utcnow().date() - timedelta(days=max_sale_age_years * 365)
+    cutoff = date.today() - timedelta(days=max_sale_age_years * 365)
     filtered = []
     for comparable in results:
         sale = sales_by_id.get(comparable.sale_id, {})

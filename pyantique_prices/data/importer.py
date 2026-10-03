@@ -21,6 +21,15 @@ class ImportResult:
     duplicates: int = 0
     invalid_prices: int = 0
     unsupported_currencies: int = 0
+    outliers_flagged: int = 0
+    asking_excluded: int = 0
+    hammer_only: int = 0
+    final_with_premium: int = 0
+
+    @property
+    def mixed_price_basis(self) -> bool:
+        """True when hammer-only and premium-inclusive prices are both present."""
+        return self.hammer_only > 0 and self.final_with_premium > 0
 
 
 SUPPORTED_CURRENCIES = {"EUR", "GBP", "USD", "CHF", "CAD", "AUD", "JPY"}
@@ -35,8 +44,30 @@ def _parse_jsonish(value):
         return value
 
 
-def import_csv(path: str | Path, session, base_currency: str = "EUR") -> ImportResult:
-    """Import historical sales from a CSV file."""
+def _float_or_none(value):
+    try:
+        return float(value) if value not in (None, "") else None
+    except (TypeError, ValueError):
+        return None
+
+
+def import_csv(
+    path: str | Path,
+    session,
+    base_currency: str = "EUR",
+    hammer_premium_rate: float = 0.0,
+) -> ImportResult:
+    """Import historical sales from a CSV file.
+
+    Prices must be comparable, so each row's *price basis* is tracked:
+
+    * ``final_price`` (hammer + buyer's premium) is preferred;
+    * hammer-only rows are uplifted by ``hammer_premium_rate`` (e.g. 0.25) when
+      given, otherwise kept as-is and counted in ``result.hammer_only`` (see
+      ``result.mixed_price_basis``);
+    * ``price_basis == "asking"`` rows are stored but never used as comparables
+      or training data: asking prices are not sale prices.
+    """
     from .models import HistoricalSale
     from .normalizer import normalize_price
 
@@ -49,12 +80,26 @@ def import_csv(path: str | Path, session, base_currency: str = "EUR") -> ImportR
             result.rows_processed += 1
 
             try:
-                price_str = row.get("final_price") or row.get("hammer_price") or ""
-                price = float(price_str) if price_str else None
+                final_str = row.get("final_price") or ""
+                hammer_str = row.get("hammer_price") or ""
+                price = float(final_str or hammer_str) if (final_str or hammer_str) else None
             except (TypeError, ValueError):
                 result.invalid_prices += 1
                 result.rows_skipped += 1
                 continue
+
+            basis = (row.get("price_basis") or "realized").strip().lower()
+            hammer = _float_or_none(hammer_str)
+            if price is not None and not final_str and hammer is not None:
+                # hammer-only row
+                if hammer_premium_rate > 0:
+                    price = hammer * (1.0 + hammer_premium_rate)
+                    basis = "hammer_plus_estimated_premium"
+                elif basis == "realized":
+                    basis = "hammer"
+                result.hammer_only += 1
+            elif price is not None and final_str:
+                result.final_with_premium += 1
 
             currency = (row.get("currency") or "EUR").upper()
             if currency not in SUPPORTED_CURRENCIES:
@@ -115,12 +160,30 @@ def import_csv(path: str | Path, session, base_currency: str = "EUR") -> ImportR
                 original_price=price,
                 normalized_currency=base_currency,
                 normalized_price=normalized,
-                price_basis=row.get("price_basis", "realized"),
+                hammer_price=hammer,
+                buyer_premium=_float_or_none(row.get("buyer_premium")),
+                price_basis=basis,
+                usable_for_training=basis != "asking",
                 text_embedding=_parse_jsonish(row.get("text_embedding")),
                 image_embedding=_parse_jsonish(row.get("image_embedding")),
             )
+            if basis == "asking":
+                result.asking_excluded += 1
             session.add(sale)
             result.rows_inserted += 1
 
     session.commit()
+    if result.mixed_price_basis:
+        logger.warning(
+            "Mixed price bases: %d hammer-only vs %d premium-inclusive rows. Set "
+            "HAMMER_PREMIUM_RATE (e.g. 0.25) so they are comparable.",
+            result.hammer_only,
+            result.final_with_premium,
+        )
+    try:
+        from .outliers import flag_outliers
+
+        result.outliers_flagged = flag_outliers(session)
+    except Exception as exc:  # noqa: BLE001 - flagging must never lose an import
+        logger.warning("Outlier flagging failed: %s", exc)
     return result

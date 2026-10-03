@@ -8,6 +8,11 @@ from sqlalchemy import JSON, Boolean, Column, DateTime, Float, Integer, String, 
 from sqlalchemy.orm import DeclarativeBase
 
 
+def _utcnow() -> datetime.datetime:
+    """Naive UTC timestamp (what SQLite stores); replaces deprecated utcnow()."""
+    return datetime.datetime.now(datetime.timezone.utc).replace(tzinfo=None)
+
+
 class Base(DeclarativeBase):
     """Base class for ORM models."""
 
@@ -60,11 +65,11 @@ class HistoricalSale(Base):
     usable_for_training = Column(Boolean, default=True)
     text_embedding = Column(JSON)
     image_embedding = Column(JSON)
-    created_at = Column(DateTime, default=datetime.datetime.utcnow)
+    created_at = Column(DateTime, default=_utcnow)
     updated_at = Column(
         DateTime,
-        default=datetime.datetime.utcnow,
-        onupdate=datetime.datetime.utcnow,
+        default=_utcnow,
+        onupdate=_utcnow,
     )
 
 
@@ -81,9 +86,9 @@ class AppraisalRecord(Base):
     calibration = Column(JSON)
     confidence = Column(JSON)
     warnings = Column(JSON)
-    created_at = Column(DateTime, default=datetime.datetime.utcnow)
+    created_at = Column(DateTime, default=_utcnow)
     updated_at = Column(
         DateTime,
-        default=datetime.datetime.utcnow,
-        onupdate=datetime.datetime.utcnow,
+        default=_utcnow,
+        onupdate=_utcnow,
     )

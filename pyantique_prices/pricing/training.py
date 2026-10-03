@@ -60,6 +60,8 @@ def prepare_training_records(sales: list[Any]) -> list[dict[str, Any]]:
             continue
         if getattr(sale, "usable_for_training", True) is False:
             continue
+        if getattr(sale, "outlier_flag", False) is True:
+            continue
         key = _sale_key(
             {
                 "source_url": getattr(sale, "source_url", None),
@@ -106,7 +108,18 @@ def time_aware_split(records: list[dict[str, Any]]) -> DatasetSplit:
     )
 
 
-def train_bucket_model(records: list[dict[str, Any]]) -> dict[str, Any]:
+MIN_BUCKET_SUPPORT = 3
+
+
+def train_bucket_model(
+    records: list[dict[str, Any]],
+    min_bucket_support: int = MIN_BUCKET_SUPPORT,
+) -> dict[str, Any]:
+    """Median price by ``object_type|country`` / ``object_type`` (log-space v2).
+
+    Buckets with fewer than ``min_bucket_support`` sales are dropped so that a
+    single lot cannot become the "typical" price of a whole category.
+    """
     prices = [row["target_price"] for row in records]
     global_median = float(np.median(prices)) if prices else 0.0
     by_object: dict[str, list[float]] = {}
@@ -117,22 +130,31 @@ def train_bucket_model(records: list[dict[str, Any]]) -> dict[str, Any]:
         by_object.setdefault(obj, []).append(row["target_price"])
         by_object_country.setdefault(f"{obj}|{ctry}", []).append(row["target_price"])
 
-    model = {
-        "model_type": "bucket_median_v1",
+    def _medians(groups: dict[str, list[float]]) -> dict[str, float]:
+        return {
+            k: float(np.median(v)) for k, v in groups.items() if len(v) >= min_bucket_support
+        }
+
+    return {
+        "model_type": "bucket_median_v2",
+        "residual_space": "log",
         "global_median": global_median,
-        "by_object": {k: float(np.median(v)) for k, v in by_object.items()},
-        "by_object_country": {
-            k: float(np.median(v)) for k, v in by_object_country.items()
-        },
-        "residual_quantiles": {
-            "p10": 0.0,
-            "p25": 0.0,
-            "p50": 0.0,
-            "p75": 0.0,
-            "p90": 0.0,
-        },
+        "min_bucket_support": min_bucket_support,
+        "by_object": _medians(by_object),
+        "by_object_country": _medians(by_object_country),
+        "residual_quantiles": {"p10": 0.0, "p25": 0.0, "p50": 0.0, "p75": 0.0, "p90": 0.0},
     }
-    return model
+
+
+def prediction_level(model: dict[str, Any], features: dict[str, Any]) -> str:
+    """Which bucket level a prediction comes from: country / object / global."""
+    obj = _text(features.get("object_type"))
+    ctry = _text(features.get("country"))
+    if f"{obj}|{ctry}" in model["by_object_country"]:
+        return "object_country"
+    if obj in model["by_object"]:
+        return "object"
+    return "global"
 
 
 def predict_price(model: dict[str, Any], features: dict[str, Any]) -> float:
@@ -146,6 +168,10 @@ def predict_price(model: dict[str, Any], features: dict[str, Any]) -> float:
     return float(model["global_median"])
 
 
+def _is_log_model(model: dict[str, Any]) -> bool:
+    return model.get("residual_space") == "log"
+
+
 def attach_residual_quantiles(
     model: dict[str, Any],
     rows: list[dict[str, Any]],
@@ -155,14 +181,16 @@ def attach_residual_quantiles(
     residuals = []
     for row in rows:
         pred = predict_price(model, row)
-        residuals.append(row["target_price"] - pred)
+        if _is_log_model(model):
+            if pred > 0 and row["target_price"] > 0:
+                residuals.append(math.log(row["target_price"] / pred))
+        else:
+            residuals.append(row["target_price"] - pred)
+    if not residuals:
+        return model
     arr = np.array(residuals)
     model["residual_quantiles"] = {
-        "p10": float(np.percentile(arr, 10)),
-        "p25": float(np.percentile(arr, 25)),
-        "p50": float(np.percentile(arr, 50)),
-        "p75": float(np.percentile(arr, 75)),
-        "p90": float(np.percentile(arr, 90)),
+        f"p{q}": float(np.percentile(arr, q)) for q in (10, 25, 50, 75, 90)
     }
     return model
 
@@ -177,12 +205,16 @@ def predict_interval(
     scale = _num(cal.get("scale"), 1.0)
     bias = _num(cal.get("bias"), 0.0)
     quantiles = model.get("residual_quantiles", {})
-    p10 = max(0.0, scale * (base + _num(quantiles.get("p10"))) + bias)
-    p25 = max(0.0, scale * (base + _num(quantiles.get("p25"))) + bias)
-    p50 = max(0.0, scale * (base + _num(quantiles.get("p50"))) + bias)
-    p75 = max(0.0, scale * (base + _num(quantiles.get("p75"))) + bias)
-    p90 = max(0.0, scale * (base + _num(quantiles.get("p90"))) + bias)
-    return {"p10": p10, "p25": p25, "p50": p50, "p75": p75, "p90": p90}
+    out = {}
+    for key in ("p10", "p25", "p50", "p75", "p90"):
+        residual = _num(quantiles.get(key))
+        if _is_log_model(model):
+            # Multiplicative: prices are heavy-tailed, errors are relative.
+            value = scale * base * math.exp(residual) + bias
+        else:  # legacy v1 artifacts: additive residuals
+            value = scale * (base + residual) + bias
+        out[key] = max(0.0, value)
+    return out
 
 
 def evaluate_predictions(
@@ -225,7 +257,10 @@ def fit_calibrator(
     model: dict[str, Any],
     rows: list[dict[str, Any]],
 ) -> dict[str, float]:
-    if not rows:
+    if not rows or _is_log_model(model):
+        # Log models are calibrated by their multiplicative residual quantiles;
+        # a linear least-squares scale would be dominated by the priciest lots
+        # and double-count the median shift.
         return {"scale": 1.0, "bias": 0.0}
     preds = np.array([predict_price(model, row) for row in rows], dtype=float)
     true = np.array([row["target_price"] for row in rows], dtype=float)
