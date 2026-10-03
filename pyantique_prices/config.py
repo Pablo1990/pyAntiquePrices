@@ -91,6 +91,11 @@ class Settings:
     structured_weight: float = field(
         default_factory=lambda: float(os.getenv("STRUCTURED_WEIGHT", "0.20"))
     )
+    # Buyer's-premium uplift applied to hammer-only prices on import (e.g. 0.25)
+    # so they are comparable with premium-inclusive final prices. 0 = no uplift.
+    hammer_premium_rate: float = field(
+        default_factory=lambda: float(os.getenv("HAMMER_PREMIUM_RATE", "0.0"))
+    )
     price_target: str = field(
         default_factory=lambda: os.getenv(
             "PRICE_TARGET", "normalized_realized_price"
