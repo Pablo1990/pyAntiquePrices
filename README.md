@@ -409,6 +409,36 @@ Import historical sales:
 python scripts/import_sales.py data/sales.csv
 ```
 
+### How the estimate is computed
+
+1. **Retrieval** scores every eligible historical sale with a hybrid of semantic
+   similarity (embeddings, lexical fallback) and structured similarity. Fields
+   missing on either side are *unknown*, not mismatches; maker/artist matching is
+   fuzzy and ignores guesses below 0.3 confidence; outlier-flagged and
+   asking-price rows are excluded.
+2. **Pricing** takes a similarity-weighted (and recency-decayed) quantile of the
+   comparables' **log** prices. A trained object-type/country median is used only
+   as a *prior* that shrinks small samples (`n_eff / (n_eff + 4)`); it never
+   replaces the comparables. The interval widens when few comparables carry the
+   weight and never collapses below a noise floor.
+3. **Price basis.** Hammer-only prices can be uplifted with `HAMMER_PREMIUM_RATE`
+   so they are comparable with premium-inclusive prices; the importer warns when
+   the two are mixed.
+
+### Measuring accuracy
+
+```bash
+python scripts/backtest.py --max-targets 300 --out backtest.json
+```
+
+Each held-out sale is re-appraised using only *earlier* sales (no look-ahead, no
+self-match) and compared with its realised price. The report gives median
+absolute % error, bias, P25-P75 / P10-P90 interval coverage against nominal
+(50 % / 80 %), lift over two baselines, and a breakdown by object type and
+number of comparables. Run it before and after every change to retrieval or
+pricing. If coverage is far above nominal, the intervals are too wide (lower
+`sigma_floor` in `pricing/estimator.py`); far below, too narrow.
+
 ### Where the price data can (legally) come from
 
 The pipeline needs a database of past prices. Sources and what their terms allow:

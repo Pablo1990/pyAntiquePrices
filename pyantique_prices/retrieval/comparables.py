@@ -129,15 +129,25 @@ def _data_quality_score(sale: dict) -> float:
     return sum(1 for item in checks if item) / len(checks)
 
 
-def _usable_sales_query(session):
-    """Rows eligible as comparables: priced, usable, and not flagged outliers."""
+def _usable_sales_query(session, *, as_of=None, exclude_ids=None):
+    """Rows eligible as comparables: priced, usable, and not flagged outliers.
+
+    ``as_of`` restricts to sales strictly before that date (point-in-time
+    retrieval, used by backtests to avoid look-ahead); ``exclude_ids`` removes
+    specific rows (the held-out sale itself).
+    """
     from pyantique_prices.data.models import HistoricalSale
 
-    return session.query(HistoricalSale).filter(
+    query = session.query(HistoricalSale).filter(
         HistoricalSale.normalized_price.is_not(None),
         HistoricalSale.usable_for_training.is_not(False),
         HistoricalSale.outlier_flag.is_not(True),
     )
+    if as_of is not None:
+        query = query.filter(HistoricalSale.sale_date < as_of)
+    if exclude_ids:
+        query = query.filter(HistoricalSale.id.not_in(list(exclude_ids)))
+    return query
 
 
 def _build_query_image_embedding(query_image, image_embedding_provider):
@@ -157,8 +167,12 @@ class HybridComparableRetriever:
         text_embedding_provider=None,
         image_embedding_provider=None,
         signal_weights: dict[str, float] | None = None,
+        as_of=None,
+        exclude_ids=None,
     ) -> None:
         self.session = session
+        self.as_of = as_of
+        self.exclude_ids = exclude_ids
         self.identification = identification
         self.text_embedding_provider = text_embedding_provider
         self.image_embedding_provider = image_embedding_provider
@@ -183,7 +197,9 @@ class HybridComparableRetriever:
             query_image,
             self.image_embedding_provider,
         )
-        rows = _usable_sales_query(self.session).all()
+        rows = _usable_sales_query(
+            self.session, as_of=self.as_of, exclude_ids=self.exclude_ids
+        ).all()
         self.sales_by_id = {}
         results: list[ComparableResult] = []
         for row in rows:
@@ -239,6 +255,8 @@ def retrieve_comparables_details(
     text_embedding_provider=None,
     image_embedding_provider=None,
     query_image=None,
+    as_of=None,
+    exclude_ids=None,
 ) -> dict:
     """Retrieve and filter comparable sales, returning counts and results."""
     from datetime import timedelta
@@ -250,6 +268,8 @@ def retrieve_comparables_details(
         text_embedding_provider=text_embedding_provider,
         image_embedding_provider=image_embedding_provider,
         signal_weights=weights,
+        as_of=as_of,
+        exclude_ids=exclude_ids,
     )
     results = retriever.search(query_text, query_image=query_image, top_k=max(top_k, 200))
 
