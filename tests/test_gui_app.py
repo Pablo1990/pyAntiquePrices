@@ -1,10 +1,12 @@
 """Drive the real tkinter window (skipped when no display is available)."""
 
+import gc
+
 import pytest
 
 tk = pytest.importorskip("tkinter")
 
-from pyantique_prices import gui  # noqa: E402
+from pyantique_prices import gui, i18n  # noqa: E402
 from pyantique_prices.deals import assess_deal  # noqa: E402
 from pyantique_prices.gui_panels import FormDialog  # noqa: E402
 from pyantique_prices.lookup import build_lookup_links  # noqa: E402
@@ -18,6 +20,8 @@ VAL = {"low": 120, "mid": 200, "high": 320, "p25": 150, "p50": 200, "p75": 260, 
 @pytest.fixture
 def app(tmp_path, monkeypatch):
     monkeypatch.setenv("DATABASE_URL", f"sqlite:///{tmp_path}/gui.db")
+    monkeypatch.setenv("APP_LANGUAGE", "en")
+    monkeypatch.setattr(i18n, "_CONFIG_PATH", tmp_path / "cfg.json")
     try:
         window = gui.App()
     except tk.TclError:
@@ -30,6 +34,8 @@ def app(tmp_path, monkeypatch):
     monkeypatch.setattr(gui.messagebox, "showerror", lambda *a, **k: None)
     yield window
     window.destroy()
+    gc.collect()  # drop Tk variables on this thread, not a worker thread
+    i18n.set_language("en")
 
 
 def _result(asking=90):
@@ -80,3 +86,43 @@ def test_links_open_with_injected_opener(app):
     app._on_analysis_done(_result())
     assert app._links.open_key_sources()
     assert opened
+
+
+def test_switch_language_keeps_inputs_and_translates_everything(app):
+    app._on_analysis_done(_result(asking=90))
+    app._costs.vars["asking"].set("90")
+    app._model_var.set("my-model")
+    app._lang_var.set("Español")
+    app._on_language_chosen()
+    assert i18n.get_language() == "es"
+    assert app._tabs.tab(0, "text").strip() == "Tasar con fotos"
+    assert app._model_var.get() == "my-model" and app._costs.vars["asking"].get() == "90"
+    assert app._verdict.banner_text == "COMPRA MUY BUENA"
+    assert "Valor estimado" in app._estimate_var.get()
+    report = app._result_text.get("1.0", tk.END)
+    assert "ESTIMACIÓN DE PRECIO" in report and "PRICE ESTIMATE" not in report
+    assert any("Precios realizados" in line for line in [report])
+    # and back again
+    app._lang_var.set("English")
+    app._on_language_chosen()
+    assert app._verdict.banner_text == "STRONG BUY"
+    assert i18n.detect_language() == "en"
+
+
+def test_spanish_ledger_and_check_flow(app):
+    app._lang_var.set("Español")
+    app._on_language_chosen()
+    app._found_vars["p50"].set("200")
+    app._check_costs.vars["asking"].set("400")
+    app._check_deal()
+    assert app._check_verdict.banner_text == "DEMASIADO CARO"
+    app._check_vars["object"].set("reloj")
+    app._region_var.set("España")
+    app._check_links()
+    assert app._check_links_panel.link_urls
+    app._ledger_add()  # empty -> dialog stays open
+    app._on_analysis_done(_result())
+    app._costs.vars["asking"].set("90")
+    app._save_to_ledger()
+    item = app._ledger_tree.get_children()[0]
+    assert app._ledger_tree.set(item, "status") == "en stock"

@@ -9,12 +9,13 @@ from tkinter import ttk
 from typing import Any, Callable
 
 from .gui_logic import (
-    VERDICT_STYLE,
     deal_inputs_from_form,
     deal_summary_lines,
     key_source_urls,
     link_groups,
+    verdict_style,
 )
+from .i18n import t
 
 _PAD = 6
 _LINK_COLOR = "#1a5fb4"
@@ -32,8 +33,8 @@ class LinksPanel(ttk.Frame):
 
         bar = ttk.Frame(self)
         bar.pack(fill=tk.X)
-        ttk.Label(bar, text="Research links - click to open in your browser", font=("TkDefaultFont", 10, "bold")).pack(side=tk.LEFT)
-        self._open_key = ttk.Button(bar, text="Open the key sources", command=self.open_key_sources, state=tk.DISABLED)
+        ttk.Label(bar, text=t("Research links - click to open in your browser"), font=("TkDefaultFont", 10, "bold")).pack(side=tk.LEFT)
+        self._open_key = ttk.Button(bar, text=t("Open the key sources"), command=self.open_key_sources, state=tk.DISABLED)
         self._open_key.pack(side=tk.RIGHT)
 
         body = ttk.Frame(self)
@@ -50,11 +51,12 @@ class LinksPanel(ttk.Frame):
 
         self._menu = tk.Menu(self, tearoff=0)
         self._menu_url: str | None = None
-        self._menu.add_command(label="Copy link", command=self._copy_link)
+        self._menu.add_command(label=t("Copy link"), command=self._copy_link)
         self.clear()
 
     # -- public ----------------------------------------------------------
-    def clear(self, message: str = "Research links appear here after an appraisal or a search.") -> None:
+    def clear(self, message: str | None = None) -> None:
+        message = message or t("Research links appear here after an appraisal or a search.")
         self._block = None
         self.link_urls = {}
         self._open_key.config(state=tk.DISABLED)
@@ -62,14 +64,14 @@ class LinksPanel(ttk.Frame):
 
     def show(self, block: dict | None) -> None:
         if not block or not block.get("links"):
-            self.clear("No links: identify the object or enter at least an object type or maker.")
+            self.clear(t("No links: identify the object or enter at least an object type or maker."))
             return
         self._block = block
         self.link_urls = {}
 
         def fill(text: tk.Text) -> None:
-            text.insert(tk.END, "Trust a price when SOLD results from 2-3 independent sources agree. "
-                                "Asking prices are an upper bound.\n", "hint")
+            text.insert(tk.END, t("Trust a price when SOLD results from 2-3 independent sources agree. "
+                                  "Asking prices are an upper bound.") + "\n", "hint")
             index = 0
             for title, links in link_groups(block):
                 text.insert(tk.END, f"{title}\n", "heading")
@@ -129,13 +131,15 @@ class VerdictPanel(ttk.Frame):
         self._banner.pack(fill=tk.X)
         self._headline = ttk.Label(self, text="", wraplength=820, justify=tk.LEFT, font=("TkDefaultFont", 11))
         self._headline.pack(fill=tk.X, pady=(6, 2))
+        self.bind("<Configure>", lambda e: self._headline.config(wraplength=max(200, e.width - 12)))
         self._detail = tk.Text(self, height=5, wrap=tk.WORD, relief=tk.FLAT, state=tk.DISABLED, padx=2, pady=2,
                                background=ttk.Style().lookup("TFrame", "background") or "#ececec")
         self._detail.pack(fill=tk.X)
         self.clear()
 
-    def clear(self, message: str = "Enter an asking price to get a buy / pass verdict.") -> None:
-        self._banner.config(text="NO DEAL CHECK YET", bg="#bdc3c7", fg="#2c3e50")
+    def clear(self, message: str | None = None) -> None:
+        message = message or t("Enter an asking price to get a buy / pass verdict.")
+        self._banner.config(text=t("NO DEAL CHECK YET"), bg="#bdc3c7", fg="#2c3e50")
         self._headline.config(text=message)
         self._set_detail([])
 
@@ -143,7 +147,7 @@ class VerdictPanel(ttk.Frame):
         if not deal:
             self.clear()
             return
-        label, bg, fg = VERDICT_STYLE.get(deal.get("verdict"), VERDICT_STYLE["no_verdict"])
+        label, bg, fg = verdict_style(deal.get("verdict"))
         self._banner.config(text=label, bg=bg, fg=fg)
         self._headline.config(text=deal.get("headline", ""))
         self._set_detail(deal_summary_lines(deal, currency))
@@ -171,31 +175,37 @@ class CostsForm(ttk.LabelFrame):
         ("resale_fee", "Selling fee %"),
     )
 
-    def __init__(self, parent, title: str = "Is the price worth it? (optional)", columns: int = 3) -> None:
-        super().__init__(parent, text=title, padding=_PAD)
+    def __init__(self, parent, title: str | None = None, columns: int = 3) -> None:
+        super().__init__(parent, text=title or t("Is the price worth it? (optional)"), padding=_PAD)
         self.vars: dict[str, tk.StringVar] = {}
         for i, (key, label) in enumerate(self.FIELDS):
             row, col = divmod(i, columns)
             cell = ttk.Frame(self)
             cell.grid(row=row, column=col, sticky=tk.W, padx=(0, 14), pady=2)
-            ttk.Label(cell, text=label + ":").pack(side=tk.LEFT)
+            ttk.Label(cell, text=t(label) + ":").pack(side=tk.LEFT)
             var = tk.StringVar()
             self.vars[key] = var
             ttk.Entry(cell, textvariable=var, width=9).pack(side=tk.LEFT, padx=(4, 0))
         rows = -(-len(self.FIELDS) // columns)
         self.keep_var = tk.BooleanVar(value=False)
-        ttk.Checkbutton(self, text="I'm buying to keep it (ignore selling costs)", variable=self.keep_var).grid(
+        ttk.Checkbutton(self, text=t("I'm buying to keep it (ignore selling costs)"), variable=self.keep_var).grid(
             row=rows, column=0, columnspan=columns, sticky=tk.W, pady=(4, 0))
         ttk.Label(
             self, foreground="#777777",
             wraplength=420 if columns < 3 else 900, justify=tk.LEFT,
-            text="Leave 'Asking price' empty to skip the deal check. Amounts are in your currency; decimals can use , or .",
+            text=t("Leave 'Asking price' empty to skip the deal check. Amounts are in your currency; decimals can use , or ."),
         ).grid(row=rows + 1, column=0, columnspan=columns, sticky=tk.W)
 
     def raw(self) -> dict[str, Any]:
         values: dict[str, Any] = {key: var.get() for key, var in self.vars.items()}
         values["keep"] = self.keep_var.get()
         return values
+
+    def set_raw(self, values: dict[str, Any]) -> None:
+        """Restore what :meth:`raw` returned (used when the window is rebuilt)."""
+        for key, var in self.vars.items():
+            var.set(values.get(key, ""))
+        self.keep_var.set(bool(values.get("keep")))
 
     def inputs(self) -> tuple[float | None, dict]:
         """``(asking_price, deal_options)``; raises ``ValueError`` with a readable message."""
@@ -233,8 +243,8 @@ class FormDialog(tk.Toplevel):
         self._error.grid(row=row, column=0, columnspan=2, sticky=tk.W, pady=(6, 0))
         buttons = ttk.Frame(frame)
         buttons.grid(row=row + 1, column=0, columnspan=2, sticky=tk.E, pady=(10, 0))
-        ttk.Button(buttons, text="Cancel", command=self.destroy).pack(side=tk.RIGHT)
-        ttk.Button(buttons, text="OK", command=self.submit).pack(side=tk.RIGHT, padx=(0, 6))
+        ttk.Button(buttons, text=t("Cancel"), command=self.destroy).pack(side=tk.RIGHT)
+        ttk.Button(buttons, text=t("OK"), command=self.submit).pack(side=tk.RIGHT, padx=(0, 6))
         self.bind("<Return>", lambda _e: self.submit())
         self.bind("<Escape>", lambda _e: self.destroy())
         if first is not None:

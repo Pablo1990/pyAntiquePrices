@@ -22,6 +22,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from ..i18n import t
+
 CALIBRATION_BOUNDS = (0.5, 1.5)
 
 
@@ -58,15 +60,15 @@ def assess_deal(
     warnings: list[str] = []
     result: dict[str, Any] = {
         "verdict": "no_verdict",
-        "headline": "No verdict: there is no usable valuation for this item.",
+        "headline": t("No verdict: there is no usable valuation for this item."),
         "asking_price": asking_price,
         "warnings": warnings,
     }
     if asking_price is None or asking_price <= 0:
-        result["headline"] = "No verdict: enter the asking price (> 0)."
+        result["headline"] = t("No verdict: enter the asking price (> 0).")
         return result
     if not valuation or not valuation.get("valuation_available", True):
-        warnings.append("Add comparable sales (see the research links) before relying on a price.")
+        warnings.append(t("Add comparable sales (see the research links) before relying on a price."))
         return result
     p25, p50, p75 = (_num(valuation.get(k)) for k in ("p25", "p50", "p75"))
     if p50 <= 0:
@@ -96,36 +98,43 @@ def assess_deal(
     required = min_margin * (2.0 if weak else 1.0)
     if weak:
         warnings.append(
-            "Weak evidence (few or dominated comparables, or an uncertain identification): "
-            f"the margin required for a good verdict is doubled to {required:.0%}."
+            t(
+                "Weak evidence (few or dominated comparables, or an uncertain identification): "
+                "the margin required for a good verdict is doubled to {required}.",
+                required=f"{required:.0%}",
+            )
         )
     if valuation.get("method") == "reference_only" or n < 3:
-        warnings.append("Fewer than 3 comparables: treat this as a rough pointer only.")
+        warnings.append(t("Fewer than 3 comparables: treat this as a rough pointer only."))
 
     if margin_low >= required:
-        verdict, headline = "strong_buy", (
-            f"Strong buy: still {margin_low:.0%} over your all-in cost even at the low estimate."
+        verdict, headline = "strong_buy", t(
+            "Strong buy: still {margin} over your all-in cost even at the low estimate.",
+            margin=f"{margin_low:.0%}",
         )
     elif margin_mid >= required:
-        verdict, headline = "good_buy", (
-            f"Good buy at the typical value ({margin_mid:.0%} margin), "
-            f"but {'a loss' if margin_low < 0 else 'a thin margin'} if it sells at the low end."
+        verdict, headline = "good_buy", t(
+            "Good buy at the typical value ({margin} margin), but {risk} if it sells at the low end.",
+            margin=f"{margin_mid:.0%}",
+            risk=t("a loss") if margin_low < 0 else t("a thin margin"),
         )
     elif margin_mid >= 0:
-        verdict, headline = "fair", "Fair price: about break-even at the typical value."
+        verdict, headline = "fair", t("Fair price: about break-even at the typical value.")
     else:
-        verdict, headline = "overpriced", (
-            f"Overpriced: you would lose about {abs(margin_mid):.0%} at the typical value."
+        verdict, headline = "overpriced", t(
+            "Overpriced: you would lose about {loss} at the typical value.", loss=f"{abs(margin_mid):.0%}"
         )
 
     if cost < 0.25 * net_low:
         warnings.append(
-            "Suspiciously cheap (under a quarter of the low estimate). Check that the item is "
-            "correctly identified, genuine and in the condition shown before getting excited."
+            t(
+                "Suspiciously cheap (under a quarter of the low estimate). Check that the item is "
+                "correctly identified, genuine and in the condition shown before getting excited."
+            )
         )
-    warnings.append("Condition, repairs, authenticity and provenance are not assessed.")
+    warnings.append(t("Condition, repairs, authenticity and provenance are not assessed."))
     if factor != 1.0:
-        warnings.append(f"Estimates adjusted x{factor:.2f} using your own past sales.")
+        warnings.append(t("Estimates adjusted x{factor} using your own past sales.", factor=f"{factor:.2f}"))
 
     result.update(
         verdict=verdict,

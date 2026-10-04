@@ -27,6 +27,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import quote_plus
 
+from pyantique_prices.i18n import t
 from pyantique_prices.services.live_market import build_query
 
 logger = logging.getLogger(__name__)
@@ -258,11 +259,11 @@ def build_lookup_links(
             return
         links.append({
             "id": site["id"] if query_kind == "specific" else f"{site['id']}_broad",
-            "name": site["name"] if query_kind == "specific" else f"{site['name']} (broader)",
+            "name": site["name"] if query_kind == "specific" else t("{name} (broader)", name=site["name"]),
             "kind": site.get("kind", "other"),
             "url": url,
             "query_kind": query_kind,
-            "note": site.get("note"),
+            "note": t(site["note"]) if site.get("note") else None,
             "verified": bool(site.get("verified")),
         })
 

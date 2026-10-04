@@ -28,6 +28,8 @@ import logging
 import re
 from typing import Any, Optional
 
+from ..i18n import t
+
 logger = logging.getLogger(__name__)
 
 NOTICE = (
@@ -198,15 +200,17 @@ def format_live_listings(block: dict | None, limit: int = 10) -> list[str]:
     """Plain-text lines for CLI / GUI output."""
     if not block:
         return []
-    lines = [f"LIVE eBAY LISTINGS ({block.get('marketplace') or 'eBay'})"]
-    lines.append(f"Search: {block.get('query') or '-'} | retrieved {block.get('retrieved_at')}")
+    lines = [t("LIVE eBAY LISTINGS ({marketplace})", marketplace=block.get("marketplace") or "eBay")]
+    lines.append(
+        t("Search: {query} | retrieved {when}", query=block.get("query") or "-", when=block.get("retrieved_at"))
+    )
     items = block.get("items") or []
     if not items:
-        lines.append("No matching listings found.")
+        lines.append(t("No matching listings found."))
     for item in items[:limit]:
         price = item.get("price")
-        price_txt = f"{price:.2f} {item.get('currency') or ''}".strip() if price is not None else "price n/a"
-        lines.append(f"- {item.get('title') or 'Untitled'} | {price_txt}")
+        price_txt = f"{price:.2f} {item.get('currency') or ''}".strip() if price is not None else t("price n/a")
+        lines.append(f"- {item.get('title') or t('Untitled')} | {price_txt}")
         lines.append(f"  {item.get('url')}")
-    lines.append(f"Note: {block.get('notice')}")
+    lines.append(t("Note: {note}", note=t(block["notice"]) if block.get("notice") else ""))
     return lines
