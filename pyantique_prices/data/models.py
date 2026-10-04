@@ -8,6 +8,11 @@ from sqlalchemy import JSON, Boolean, Column, DateTime, Float, Integer, String, 
 from sqlalchemy.orm import DeclarativeBase
 
 
+def _utcnow() -> datetime.datetime:
+    """Naive UTC timestamp (what SQLite stores); replaces deprecated utcnow()."""
+    return datetime.datetime.now(datetime.timezone.utc).replace(tzinfo=None)
+
+
 class Base(DeclarativeBase):
     """Base class for ORM models."""
 
@@ -59,11 +64,12 @@ class HistoricalSale(Base):
     outlier_reason = Column(String(500))
     usable_for_training = Column(Boolean, default=True)
     text_embedding = Column(JSON)
-    created_at = Column(DateTime, default=datetime.datetime.utcnow)
+    image_embedding = Column(JSON)
+    created_at = Column(DateTime, default=_utcnow)
     updated_at = Column(
         DateTime,
-        default=datetime.datetime.utcnow,
-        onupdate=datetime.datetime.utcnow,
+        default=_utcnow,
+        onupdate=_utcnow,
     )
 
 
@@ -80,9 +86,53 @@ class AppraisalRecord(Base):
     calibration = Column(JSON)
     confidence = Column(JSON)
     warnings = Column(JSON)
-    created_at = Column(DateTime, default=datetime.datetime.utcnow)
+    created_at = Column(DateTime, default=_utcnow)
     updated_at = Column(
         DateTime,
-        default=datetime.datetime.utcnow,
-        onupdate=datetime.datetime.utcnow,
+        default=_utcnow,
+        onupdate=_utcnow,
     )
+
+
+class LedgerItem(Base):
+    """An item you bought (and maybe sold): your own, private transaction record."""
+
+    __tablename__ = "ledger_items"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    title = Column(String(500), nullable=False)
+    description = Column(Text)
+    object_type = Column(String(200))
+    manufacturer = Column(String(200))
+    artist = Column(String(200))
+    period = Column(String(200))
+    material = Column(String(500))
+    condition = Column(String(100))
+    country = Column(String(100))
+    notes = Column(Text)
+    photos = Column(JSON)  # list of local file paths
+
+    # Purchase
+    status = Column(String(20), default="held", nullable=False)  # held | sold | kept
+    acquired_date = Column(DateTime)
+    acquired_price = Column(Float, nullable=False)
+    acquired_costs = Column(Float, default=0.0)  # shipping, premium, VAT, restoration
+    acquired_where = Column(String(200))
+    source_url = Column(String(1000))
+    currency = Column(String(10), default="EUR")
+
+    # What the tool thought when you bought it (for calibration)
+    estimate_low = Column(Float)
+    estimate_mid = Column(Float)
+    estimate_high = Column(Float)
+    estimate_method = Column(String(100))
+    deal_verdict = Column(String(30))
+
+    # Sale
+    sold_date = Column(DateTime)
+    sold_price = Column(Float)
+    sold_fees = Column(Float, default=0.0)  # platform fees + postage you paid
+    sold_where = Column(String(200))
+
+    created_at = Column(DateTime, default=_utcnow)
+    updated_at = Column(DateTime, default=_utcnow, onupdate=_utcnow)

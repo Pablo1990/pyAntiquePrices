@@ -26,7 +26,12 @@ def main():
     session_factory = get_session_factory(engine)
 
     with session_factory() as session:
-        result = import_csv(csv_path, session, base_currency=settings.base_currency)
+        result = import_csv(
+            csv_path,
+            session,
+            base_currency=settings.base_currency,
+            hammer_premium_rate=settings.hammer_premium_rate,
+        )
 
     print(f"Rows processed:          {result.rows_processed}")
     print(f"Rows inserted:           {result.rows_inserted}")
@@ -35,6 +40,13 @@ def main():
     print(f"Duplicates:              {result.duplicates}")
     print(f"Invalid prices:          {result.invalid_prices}")
     print(f"Unsupported currencies:  {result.unsupported_currencies}")
+    print(f"Outliers flagged:        {result.outliers_flagged}")
+    print(f"Asking prices (unused):  {result.asking_excluded}")
+    if result.mixed_price_basis:
+        print(
+            f"WARNING: {result.hammer_only} hammer-only and {result.final_with_premium} "
+            "premium-inclusive prices are mixed. Set HAMMER_PREMIUM_RATE in .env."
+        )
 
 
 if __name__ == "__main__":

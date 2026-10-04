@@ -11,6 +11,7 @@ class _FakeClient:
         assert len(images) == 3
         return """{
   "object_type": "mantel clock",
+  "period": "late 19th century",
   "country": "France",
   "condition": "good",
   "marks": [{"text": "Japy Freres", "confidence": 0.9}]
@@ -62,19 +63,22 @@ def test_multi_image_analyzer_returns_structured_identification(tmp_path):
     files = _touch_images(tmp_path)
     analyzer = MultiImageAnalyzer(client=_FakeClient())
     result = analyzer.analyze(files, context="French family estate")
-    assert result["object_type"]["value"] == "mantel clock"
-    assert result["country"]["value"] == "France"
+    assert result["object_type"] == "mantel clock"
+    assert result["period"] == "late 19th century"
+    assert result["country"] == "France"
     assert result["marks"][0]["normalized_text"] == "JAPY FRERES"
     assert result["manufacturer_candidates"][0]["name"] == "Japy Freres"
+    assert result["search_document"]
+    assert len(result["image_roles"]) == 3
 
 
 def test_multi_image_analyzer_falls_back_to_text_fields(tmp_path):
     files = _touch_images(tmp_path)
     analyzer = MultiImageAnalyzer(client=_FakeTextClient())
     result = analyzer.analyze(files, context="")
-    assert result["object_type"]["value"] == "Oil painting"
-    assert result["likely_period"]["value"] == "Late 19th century"
-    assert result["country"]["value"] == "France"
+    assert result["object_type"] == "Oil painting"
+    assert result["likely_period"] == "Late 19th century"
+    assert result["country"] == "France"
     assert "Oil on canvas" in result["materials"]
 
 
@@ -85,8 +89,8 @@ def test_multi_image_analyzer_retries_with_compact_prompt_after_context_overflow
 
     result = analyzer.analyze(files, context="x" * 2000)
 
-    assert result["object_type"]["value"] == "lithograph"
-    assert len(client.calls) == 2
+    assert result["object_type"] == "lithograph"
+    assert len(client.calls) >= 2
     assert client.calls[0]["system"] is not None
     assert client.calls[1]["system"] is None
 

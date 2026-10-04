@@ -137,16 +137,25 @@ STRUCTURED_IDENTIFICATION_PROMPT = """\
 You are analyzing 3 to 5 images of the same antique object from different angles.
 
 Use all images together and produce a structured identification. Focus on:
-- object type and subtype
-- likely period and year range
-- manufacturer, artist, or workshop candidates
+- image_roles keyed by file name using: front, back, side, base, maker_mark, signature, detail, label, unknown
+- object_type and subtype
+- period, estimated_year_start, estimated_year_end
+- manufacturer_candidates, artist_candidates, workshop_candidates as lists of \
+  objects: {{"name":"...", "confidence":0.0, "evidence":"..."}}
 - country and region
 - materials, techniques, styles
-- condition, dimensions, visible marks, signatures, provenance clues
-- rarity, image quality, contradictions, and uncertainty notes
+- condition
+- height, width, depth, diameter, weight when visible or supplied
+- marks as list objects: {{"image_name":"...","text":"...","mark_type":"...", \
+  "confidence":0.0,"evidence":"..."}}
+- signature_text
+- provenance_clues
+- rarity_assessment
+- contradictions and uncertainty_notes
+- normalized_description (short normalized textual summary for search)
 
-Return valid JSON only. Use concise evidence-backed values. If uncertain, leave \
-fields null or empty and explain uncertainty in the uncertainty_notes list.
+Return valid JSON only. Use concise evidence-backed values. If uncertain, leave fields null or
+empty and explain uncertainty in the uncertainty_notes list. Do not estimate price.
 
 Additional context from the owner:
 {context}
@@ -158,9 +167,12 @@ COMPACT_MULTI_IMAGE_PROMPT = """\
 Analyze these 3 to 5 photos of the same antique object together.
 
 Return compact valid JSON only with:
+- image_roles
 - object_type
 - subtype
-- likely_period
+- period
+- estimated_year_start
+- estimated_year_end
 - country
 - region
 - materials
@@ -169,6 +181,9 @@ Return compact valid JSON only with:
 - condition
 - marks
 - manufacturer_candidates
+- artist_candidates
+- workshop_candidates
+- normalized_description
 - uncertainty_notes
 
 Be concise. If uncertain, leave fields null or empty.

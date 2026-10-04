@@ -87,6 +87,15 @@ class OllamaClient:
             return getattr(message, "content", "")
         return response["message"]["content"]
 
+    def embed_text(self, text: str) -> list[float]:
+        """Generate text embeddings."""
+        client = self._get_client()
+        response = client.embeddings(model=self.model, prompt=text)
+        embedding = getattr(response, "embedding", None)
+        if embedding is not None:
+            return embedding
+        return response["embedding"]
+
 
 def is_context_overflow_error(exc: Exception) -> bool:
     message = str(exc)
@@ -97,12 +106,3 @@ def is_context_overflow_error(exc: Exception) -> bool:
         r"\bcontext size\b",
     ]
     return any(re.search(pattern, message, re.IGNORECASE) for pattern in patterns)
-
-    def embed_text(self, text: str) -> list[float]:
-        """Generate text embeddings."""
-        client = self._get_client()
-        response = client.embeddings(model=self.model, prompt=text)
-        embedding = getattr(response, "embedding", None)
-        if embedding is not None:
-            return embedding
-        return response["embedding"]

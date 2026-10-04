@@ -55,6 +55,34 @@ class TestBuildQuery:
     def test_empty(self):
         assert build_query(None) == ""
 
+    def test_specialist_schema_flat_strings_and_best_candidate(self):
+        # Shape produced by vision.schemas.Identification.model_dump()
+        ident = {
+            "object_type": "vase",
+            "subtype": None,
+            "period": "Art Nouveau",
+            "likely_period": "Art Nouveau",
+            "manufacturer_candidates": [{"name": "Gallé", "confidence": 0.2}],
+            "artist_candidates": [{"name": "Émile Gallé", "confidence": 0.8}],
+            "workshop_candidates": [],
+            "materials": ["glass"],
+            "marks": [],
+        }
+        assert build_query(ident) == "Émile Gallé vase glass Art Nouveau"
+
+    def test_low_confidence_maker_is_ignored(self):
+        ident = {"object_type": "vase", "manufacturer_candidates": [{"name": "Foo", "confidence": 0.1}]}
+        assert build_query(ident) == "vase"
+
+    def test_maker_taken_from_mark_candidates_or_signature(self):
+        marked = {
+            "object_type": "plate",
+            "marks": [{"manufacturer_candidates": [{"name": "Meissen", "confidence": 0.6}]}],
+        }
+        assert build_query(marked) == "Meissen plate"
+        signed = {"object_type": "painting", "signature_text": "J. Sorolla"}
+        assert build_query(signed) == "J Sorolla painting"
+
 
 class TestEbayLiveListings:
     def test_search_returns_in_memory_block(self):

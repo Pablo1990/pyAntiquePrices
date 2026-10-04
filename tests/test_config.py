@@ -16,9 +16,12 @@ def test_settings_defaults(monkeypatch):
     assert settings.ollama_vision_model == "qwen3-vl:8b"
     assert settings.ollama_embed_model == "embeddinggemma"
     assert settings.ollama_num_ctx == 8192
-    assert settings.top_k_comparables == 50
+    assert settings.top_k_comparables == 20
     assert settings.min_similarity == 0.05
     assert settings.enable_image_embeddings is False
+    assert settings.semantic_weight == 0.5
+    assert settings.visual_weight == 0.3
+    assert settings.structured_weight == 0.2
 
 
 def test_settings_reads_environment(monkeypatch):

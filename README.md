@@ -409,6 +409,120 @@ Import historical sales:
 python scripts/import_sales.py data/sales.csv
 ```
 
+## Assessing your own finds (links, deal check, ledger)
+
+This project is free and open and **ships no price data**. It gives you tools to
+check an item yourself and keep a record of your own deals.
+
+### 1. Research links - check the price yourself
+
+Every appraisal includes `RESEARCH LINKS`: search URLs for eBay *sold* listings,
+Catawiki, auction-house archives (Christie's, Sotheby's, Bonhams, Spanish, UK,
+French and German houses), dealers, museum collections and category specialists
+(watches, coins, books, ceramics, silver marks...). They open in **your** browser:
+nothing is fetched, scraped or stored, so they are compliant with every site's
+terms and need no API keys.
+
+```bash
+pyantique-prices links --object "pocket watch" --maker Omega --material silver
+pyantique-prices links --object vase --maker Galle --regions all    # every region
+pyantique-prices links --object "oil painting" --category art --regions es,fr
+```
+
+*Triangulate*: trust a price when **sold** results from two or three independent
+sources agree; treat asking prices (marketplaces, dealers) as an upper bound.
+
+* `--regions global,es,uk,fr,de,us|all` (or `LOOKUP_REGIONS` in `.env`; default `global,es,uk`).
+* Sites follow the object: a watch adds Chrono24, a coin adds Numista, etc.
+* Many entries use a Google `site:` search so they keep working when a site
+  changes its own search URL. Only Catawiki's direct URL has been confirmed.
+  Add, replace or drop sites with a JSON file (`LOOKUP_SITES_FILE`, see
+  `pyantique_prices/lookup/links.py`).
+
+### 2. Deal check - is the asking price worth it?
+
+```bash
+# from a photo appraisal
+pyantique-prices ./photos --asking-price 120 --shipping 8 --resale-fee 13 --json-out item.json
+# or from numbers you found yourself
+pyantique-prices deal --asking 120 --p25 150 --p50 220 --p75 300 --shipping 8 --resale-fee 13
+pyantique-prices deal --asking 120 --appraisal item.json --keep     # buying to keep
+```
+
+The verdict (`STRONG BUY`, `GOOD BUY`, `FAIR PRICE`, `OVERPRICED`, `NO VERDICT`)
+uses your **all-in cost** (price, buyer's premium, VAT, shipping, restoration)
+against the value **after selling costs**. A strong buy must still profit at the
+*low* estimate (P25) with a 30 % margin, and the margin doubles when evidence is
+weak. It also prints the highest asking price that would still be a strong or
+good buy. It cannot see condition problems, fakes or provenance. Very cheap
+results are flagged as suspicious, not as bargains.
+
+### 3. Ledger - learn from your own deals
+
+```bash
+pyantique-prices ledger add "Omega silver watch" --price 120 --costs 8 --where "flea market" --appraisal item.json
+pyantique-prices ledger sell 1 --price 260 --fees 30
+pyantique-prices ledger list | summary | calibration
+pyantique-prices ledger export my_sales.csv      # your sold items, importer format
+pyantique-prices ledger sync                     # add them to your local comparables
+```
+
+`summary` reports profit, ROI, win rate and how accurate the estimates were. After
+5 sales, the deal check automatically corrects a consistent bias in the estimates
+(`calibration`). The ledger lives in your local database and is never uploaded.
+
+### Bring your own data
+
+The estimate is only as good as the sales you give it. Use data you have the
+**right to use**:
+
+* **Your own transactions** (the ledger). They are your facts; best ground truth.
+* **Data you licensed**, or that an auction house gave you permission to use.
+* **Open data** (museum open access, Getty Provenance Index) - mostly historic;
+  useful for identification more than modern prices.
+* **Do not** bulk-copy results from sites whose terms forbid it. Looking things up
+  by hand and recording your own conclusions is fine; scraping them is not. The
+  eBay API is used only to *display* live listings, never to store or model them.
+
+```bash
+pyantique-prices template > my_sales.csv     # columns the importer understands
+python scripts/import_sales.py my_sales.csv  # then: python scripts/index_sales.py
+```
+
+Set `HAMMER_PREMIUM_RATE` if your rows are hammer prices, and mark asking prices
+with `price_basis=asking` so they are never used as comparables. After importing,
+run `python scripts/backtest.py` to see how accurate the estimates are for *your* data.
+
+### How the estimate is computed
+
+1. **Retrieval** scores every eligible historical sale with a hybrid of semantic
+   similarity (embeddings, lexical fallback) and structured similarity. Fields
+   missing on either side are *unknown*, not mismatches; maker/artist matching is
+   fuzzy and ignores guesses below 0.3 confidence; outlier-flagged and
+   asking-price rows are excluded.
+2. **Pricing** takes a similarity-weighted (and recency-decayed) quantile of the
+   comparables' **log** prices. A trained object-type/country median is used only
+   as a *prior* that shrinks small samples (`n_eff / (n_eff + 4)`); it never
+   replaces the comparables. The interval widens when few comparables carry the
+   weight and never collapses below a noise floor.
+3. **Price basis.** Hammer-only prices can be uplifted with `HAMMER_PREMIUM_RATE`
+   so they are comparable with premium-inclusive prices; the importer warns when
+   the two are mixed.
+
+### Measuring accuracy
+
+```bash
+python scripts/backtest.py --max-targets 300 --out backtest.json
+```
+
+Each held-out sale is re-appraised using only *earlier* sales (no look-ahead, no
+self-match) and compared with its realised price. The report gives median
+absolute % error, bias, P25-P75 / P10-P90 interval coverage against nominal
+(50 % / 80 %), lift over two baselines, and a breakdown by object type and
+number of comparables. Run it before and after every change to retrieval or
+pricing. If coverage is far above nominal, the intervals are too wide (lower
+`sigma_floor` in `pricing/estimator.py`); far below, too narrow.
+
 ### Where the price data can (legally) come from
 
 The pipeline needs a database of past prices. Sources and what their terms allow:

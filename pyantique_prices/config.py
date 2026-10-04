@@ -40,6 +40,14 @@ def load_dotenv(*paths: Path) -> None:
 load_dotenv()
 
 
+EBAY_DOMAINS = {
+    "EBAY_ES": "ebay.es", "EBAY_GB": "ebay.co.uk", "EBAY_US": "ebay.com",
+    "EBAY_DE": "ebay.de", "EBAY_FR": "ebay.fr", "EBAY_IT": "ebay.it",
+    "EBAY_NL": "ebay.nl", "EBAY_AU": "ebay.com.au", "EBAY_CA": "ebay.ca",
+    "EBAY_IE": "ebay.ie", "EBAY_AT": "ebay.at", "EBAY_BE": "ebay.be",
+}
+
+
 @dataclass
 class Settings:
     ollama_host: str = field(
@@ -61,7 +69,7 @@ class Settings:
     )
     base_currency: str = field(default_factory=lambda: os.getenv("BASE_CURRENCY", "EUR"))
     top_k_comparables: int = field(
-        default_factory=lambda: int(os.getenv("TOP_K_COMPARABLES", "50"))
+        default_factory=lambda: int(os.getenv("TOP_K_COMPARABLES", "20"))
     )
     min_similarity: float = field(
         default_factory=lambda: float(os.getenv("MIN_SIMILARITY", "0.05"))
@@ -81,6 +89,20 @@ class Settings:
     enable_image_embeddings: bool = field(
         default_factory=lambda: os.getenv("ENABLE_IMAGE_EMBEDDINGS", "false").lower()
         == "true"
+    )
+    semantic_weight: float = field(
+        default_factory=lambda: float(os.getenv("SEMANTIC_WEIGHT", "0.50"))
+    )
+    visual_weight: float = field(
+        default_factory=lambda: float(os.getenv("VISUAL_WEIGHT", "0.30"))
+    )
+    structured_weight: float = field(
+        default_factory=lambda: float(os.getenv("STRUCTURED_WEIGHT", "0.20"))
+    )
+    # Buyer's-premium uplift applied to hammer-only prices on import (e.g. 0.25)
+    # so they are comparable with premium-inclusive final prices. 0 = no uplift.
+    hammer_premium_rate: float = field(
+        default_factory=lambda: float(os.getenv("HAMMER_PREMIUM_RATE", "0.0"))
     )
     price_target: str = field(
         default_factory=lambda: os.getenv(
@@ -113,6 +135,11 @@ class Settings:
     ebay_category_ids: str = field(
         default_factory=lambda: os.getenv("EBAY_CATEGORY_IDS", "20081")
     )
+
+    @property
+    def ebay_domain(self) -> str:
+        """Website domain of the configured eBay marketplace (for research links)."""
+        return EBAY_DOMAINS.get(self.ebay_marketplace_id.upper(), "ebay.com")
 
 
 settings = Settings()

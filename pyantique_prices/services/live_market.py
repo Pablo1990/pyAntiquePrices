@@ -28,6 +28,8 @@ import logging
 import re
 from typing import Any, Optional
 
+from ..i18n import t
+
 logger = logging.getLogger(__name__)
 
 NOTICE = (
@@ -49,6 +51,37 @@ def _value(field: Any) -> Optional[str]:
     return None
 
 
+_MIN_MAKER_CONFIDENCE = 0.3
+_MAKER_KEYS = ("manufacturer_candidates", "artist_candidates", "workshop_candidates")
+
+
+def _best_maker(identification: dict) -> Optional[str]:
+    """Highest-confidence maker/artist/workshop name, or a signature/mark.
+
+    Candidates below ``_MIN_MAKER_CONFIDENCE`` are ignored: a wrong maker in
+    the query makes eBay return unrelated items, which is worse than none.
+    """
+    pool: list[tuple[float, str]] = []
+    marks = identification.get("marks") or []
+    sources = [identification.get(key) or [] for key in _MAKER_KEYS]
+    sources.extend(
+        (mark.get("manufacturer_candidates") or [])
+        for mark in marks
+        if isinstance(mark, dict)
+    )
+    for candidates in sources:
+        for cand in candidates:
+            if not isinstance(cand, dict):
+                continue
+            name, conf = cand.get("name"), cand.get("confidence")
+            if isinstance(name, str) and name.strip():
+                pool.append((float(conf) if isinstance(conf, (int, float)) else 0.0, name.strip()))
+    pool = [item for item in pool if item[0] >= _MIN_MAKER_CONFIDENCE]
+    if pool:
+        return max(pool, key=lambda item: item[0])[1]
+    return _value(identification.get("signature_text"))
+
+
 def build_query(identification: dict | None, context: str = "") -> str:
     """Build a short eBay search query from a structured identification.
 
@@ -59,13 +92,9 @@ def build_query(identification: dict | None, context: str = "") -> str:
     identification = identification or {}
     parts: list[str] = []
 
-    for key in ("manufacturer_candidates", "artist_candidates", "workshop_candidates"):
-        candidates = identification.get(key) or []
-        if candidates and isinstance(candidates[0], dict):
-            name = candidates[0].get("name")
-            if isinstance(name, str) and name.strip():
-                parts.append(name.strip())
-                break
+    maker = _best_maker(identification)
+    if maker:
+        parts.append(maker)
 
     for key in ("object_type", "subtype"):
         val = _value(identification.get(key))
@@ -76,7 +105,9 @@ def build_query(identification: dict | None, context: str = "") -> str:
     if materials and isinstance(materials[0], str):
         parts.append(materials[0])
 
-    period = _value(identification.get("likely_period"))
+    period = _value(identification.get("likely_period")) or _value(
+        identification.get("period")
+    )
     if period:
         parts.append(period)
 
@@ -169,15 +200,17 @@ def format_live_listings(block: dict | None, limit: int = 10) -> list[str]:
     """Plain-text lines for CLI / GUI output."""
     if not block:
         return []
-    lines = [f"LIVE eBAY LISTINGS ({block.get('marketplace') or 'eBay'})"]
-    lines.append(f"Search: {block.get('query') or '-'} | retrieved {block.get('retrieved_at')}")
+    lines = [t("LIVE eBAY LISTINGS ({marketplace})", marketplace=block.get("marketplace") or "eBay")]
+    lines.append(
+        t("Search: {query} | retrieved {when}", query=block.get("query") or "-", when=block.get("retrieved_at"))
+    )
     items = block.get("items") or []
     if not items:
-        lines.append("No matching listings found.")
+        lines.append(t("No matching listings found."))
     for item in items[:limit]:
         price = item.get("price")
-        price_txt = f"{price:.2f} {item.get('currency') or ''}".strip() if price is not None else "price n/a"
-        lines.append(f"- {item.get('title') or 'Untitled'} | {price_txt}")
+        price_txt = f"{price:.2f} {item.get('currency') or ''}".strip() if price is not None else t("price n/a")
+        lines.append(f"- {item.get('title') or t('Untitled')} | {price_txt}")
         lines.append(f"  {item.get('url')}")
-    lines.append(f"Note: {block.get('notice')}")
+    lines.append(t("Note: {note}", note=t(block["notice"]) if block.get("notice") else ""))
     return lines

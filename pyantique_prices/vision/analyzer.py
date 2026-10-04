@@ -7,14 +7,31 @@ import re
 from pathlib import Path
 from typing import Sequence
 
+from pyantique_prices.retrieval.documents import build_search_document
+
 from .marks import MarkAnalysisService
 from .ollama import OllamaClient, is_context_overflow_error
-from .schemas import AntiqueIdentification
+from .schemas import AntiqueIdentification, AntiqueImageSet, ImageRole
 
 MIN_IMAGES = 3
 MAX_IMAGES = 5
 SUPPORTED_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp"}
 MAX_CONTEXT_CHARS = 600
+
+ROLE_KEYWORDS = {
+    "front": ImageRole.front,
+    "back": ImageRole.back,
+    "rear": ImageRole.back,
+    "side": ImageRole.side,
+    "base": ImageRole.base,
+    "bottom": ImageRole.base,
+    "mark": ImageRole.maker_mark,
+    "maker": ImageRole.maker_mark,
+    "signature": ImageRole.signature,
+    "signed": ImageRole.signature,
+    "detail": ImageRole.detail,
+    "label": ImageRole.label,
+}
 
 
 def validate_images(images: Sequence[Path | str]) -> list[Path]:
@@ -40,19 +57,6 @@ class MultiImageAnalyzer:
         self.mark_service = mark_service or MarkAnalysisService()
 
     @staticmethod
-    def _to_evidence(value):
-        if isinstance(value, dict):
-            return value
-        if value is None:
-            return {}
-        return {
-            "value": str(value),
-            "confidence": 0.5,
-            "evidence": "Auto-converted from unstructured model output",
-            "evidence_images": [],
-        }
-
-    @staticmethod
     def _extract_text_field(raw: str, keys: list[str]) -> str | None:
         for key in keys:
             pattern = rf"(?im)^\s*{re.escape(key)}\s*[:\-]\s*(.+?)\s*$"
@@ -76,7 +80,7 @@ class MultiImageAnalyzer:
         if object_type:
             payload["object_type"] = object_type
         if period:
-            payload["likely_period"] = period
+            payload["period"] = period
         if country:
             payload["country"] = country
         if condition:
@@ -85,30 +89,28 @@ class MultiImageAnalyzer:
             payload["materials"] = materials
         return payload
 
-    def _normalize_payload(self, payload: dict) -> dict:
-        evidence_fields = [
-            "object_type",
-            "subtype",
-            "likely_period",
-            "country",
-            "region",
-            "condition",
-            "rarity",
-            "image_quality",
-        ]
-        normalized = dict(payload)
-        for field in evidence_fields:
-            normalized[field] = self._to_evidence(normalized.get(field))
+    @staticmethod
+    def infer_image_role(path: Path | str) -> ImageRole:
+        name = Path(path).stem.lower()
+        for keyword, role in ROLE_KEYWORDS.items():
+            if keyword in name:
+                return role
+        return ImageRole.unknown
 
-        marks = normalized.get("marks")
-        if isinstance(marks, list):
-            normalized_marks = []
-            for mark in marks:
-                if isinstance(mark, str):
-                    normalized_marks.append({"text": mark, "confidence": 0.5})
-                elif isinstance(mark, dict):
-                    normalized_marks.append(mark)
-            normalized["marks"] = normalized_marks
+    def _build_image_set(self, paths: list[Path]) -> AntiqueImageSet:
+        roles = [self.infer_image_role(path) for path in paths]
+        return AntiqueImageSet.from_paths(paths, roles=roles)
+
+    def _normalize_payload(self, payload: dict, image_set: AntiqueImageSet) -> dict:
+        normalized = dict(payload)
+        normalized.setdefault(
+            "image_roles",
+            {image.name: image.role.value for image in image_set.images},
+        )
+        if not normalized.get("period") and normalized.get("likely_period"):
+            normalized["period"] = normalized.get("likely_period")
+        if not normalized.get("likely_period") and normalized.get("period"):
+            normalized["likely_period"] = normalized.get("period")
         return normalized
 
     @staticmethod
@@ -141,6 +143,7 @@ class MultiImageAnalyzer:
     def analyze(self, images: Sequence[Path | str], context: str = "") -> dict:
         """Run multi-image analysis and return structured identification."""
         paths = validate_images(images)
+        image_set = self._build_image_set(paths)
         from .prompts import (
             COMPACT_MULTI_IMAGE_PROMPT,
             MULTI_IMAGE_PROMPT,
@@ -148,7 +151,12 @@ class MultiImageAnalyzer:
         )
 
         truncated_context = self._truncate_context(context)
-        prompt = MULTI_IMAGE_PROMPT.format(context=truncated_context or "None provided")
+        role_context = "\n".join(
+            f"- {image.name}: inferred role={image.role.value}" for image in image_set.images
+        )
+        prompt = MULTI_IMAGE_PROMPT.format(
+            context=(truncated_context or "None provided") + f"\n\nImage role hints:\n{role_context}"
+        )
         try:
             raw = self.client.analyze_images(paths, prompt, system=SYSTEM_PROMPT)
         except Exception as exc:  # noqa: BLE001
@@ -169,16 +177,25 @@ class MultiImageAnalyzer:
         payload = self._extract_json(raw)
         if not payload:
             payload = self._fallback_from_text(raw)
-        normalized = self._normalize_payload(payload)
+        normalized = self._normalize_payload(payload, image_set)
         identification = AntiqueIdentification.model_validate(normalized).model_dump()
-        enriched_marks = self.mark_service.analyze(identification)
+        enriched_marks = self.mark_service.analyze(
+            identification,
+            image_set=image_set,
+            client=self.client,
+        )
         identification["marks"] = enriched_marks
         if not identification.get("manufacturer_candidates"):
             from_marks = []
             for mark in enriched_marks:
                 for candidate in mark.get("manufacturer_candidates", []):
-                    from_marks.append({"name": candidate, "confidence": mark.get("confidence", 0.0)})
+                    if isinstance(candidate, dict):
+                        from_marks.append(candidate)
             identification["manufacturer_candidates"] = from_marks
         identification["source_images"] = [str(path) for path in paths]
+        identification["normalized_description"] = (
+            identification.get("normalized_description") or build_search_document(identification)
+        )
+        identification["search_document"] = build_search_document(identification)
         identification["raw_model_output"] = raw
         return identification
